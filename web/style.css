@@ -270,6 +270,13 @@ body:has(.sidebar.open) .here-btn { display: none; }
 .hero-act .btn { padding: 0 22px; }
 .hero-act .btn .ic { width: 20px; height: 20px; }
 .hero-hint { font-size: 14px; color: var(--ink-2); }
+/* outside India: amber alert above the (unchanged) title. Figma: 05 Outside India · not live yet */
+.hero-notice { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 20px; padding: 7px 14px 7px 12px; border-radius: 999px;
+  background: #FFD099; border: 1px solid #EEB36F; color: #3C2000; font-size: 14px; font-weight: 600; line-height: 20px; }
+.hero-notice[hidden], .hero-act .btn[hidden] { display: none; }
+.hero-notice .ic { width: 18px; height: 18px; color: #834C00; }
+.hero.abroad { --hero-solid: 380px; }
+.hero-act .btn img { width: 20px; height: 20px; }
 body.hero-on .here-btn { display: none; }
 
 /* ---------- mobile: map + search pill; place = bottom sheet that pulls up to a full-screen page ---------- */
@@ -317,6 +324,7 @@ body.hero-on .here-btn { display: none; }
   .gauge { padding: 12px; }
   /* hero: starts clear just under the Mobile/WiFi toggle; stacked USPs, full-width CTA; Locate hides (the CTA locates) */
   .hero { top: calc(max(8px, env(safe-area-inset-top)) + 110px); --hero-solid: 380px; }
+  .hero.abroad { --hero-solid: 440px; }
   .hero-in { width: 100%; padding: 0 20px calc(28px + env(safe-area-inset-bottom)); }
   .hero h1 { margin-bottom: 20px; font-size: 38px; line-height: 1.06; letter-spacing: -.025em; }
   .usps { flex-direction: column; gap: 12px; margin-bottom: 20px; }

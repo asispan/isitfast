@@ -1110,10 +1110,32 @@
   function heroSeen() { try { return localStorage.getItem(HERO_KEY) === "1"; } catch { return false; } }
   function showHero() { heroOn = true; heroEl.hidden = false; document.body.classList.add("hero-on"); }
   function hideHero() {
+    heroDismissed = true;
     if (!heroOn) return;
     heroOn = false; heroEl.hidden = true; document.body.classList.remove("hero-on");
     try { localStorage.setItem(HERO_KEY, "1"); } catch {}
   }
+  let heroDismissed = false;
+  // Outside India (Cloudflare's IP country) we have no data: same hero, plus an amber "not live in your
+  // country yet" notice and a "Check speeds in India" CTA. Shown on every visit, not just the first, unless
+  // the visitor already interacted before the lookup came back.
+  async function checkAbroad() {
+    try {
+      const r = await (await fetch("/api/whereami")).json();
+      if (!r.country || r.country === "IN") return;
+      heroEl.classList.add("abroad");
+      $("#hero-notice").hidden = false; $("#hero-go").hidden = true; $("#hero-india").hidden = false;
+      if (!heroOn && !heroDismissed) showHero();
+    } catch {}
+  }
+  $("#hero-india").addEventListener("click", async () => {
+    hideHero();
+    try {
+      const h = await (await fetch("/api/hotspot")).json();
+      if (h.lat != null) return flyTo(h.lat, h.lon, h.zoom || 15);
+    } catch {}
+    flyTo(12.9716, 77.5946, 13); // Bengaluru
+  });
   map.addListener("dragstart", hideHero);
   map.addListener("click", hideHero);
   q.addEventListener("focus", hideHero);
@@ -1134,5 +1156,5 @@
   history.replaceState(null, "", "/"); // Back → the map, not the same place; drops ?r= from the address bar
   if (fromRoute) openPlace(fromRoute);
   else if (goHere) testHere();
-  else { firstView(); if (!heroSeen()) showHero(); }
+  else { firstView(); if (!heroSeen()) showHero(); checkAbroad(); }
 })();

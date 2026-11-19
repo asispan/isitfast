@@ -1218,13 +1218,17 @@ def meta():
 
 @app.get("/api/whereami")
 def whereami(req: Request):
-    """Rough IP-based location from Cloudflare visitor-location headers (fallback when GPS is denied)."""
+    """Rough IP-based location from Cloudflare visitor-location headers (fallback when GPS is denied).
+    `country` (ISO 3166-1 alpha-2, from CF-IPCountry) lets the page tell visitors outside India that we
+    have no data for them yet; null when unknown (XX = unknown, T1 = Tor)."""
+    cc = (req.headers.get("cf-ipcountry") or "").upper()
+    country = cc if len(cc) == 2 and cc.isalpha() and cc not in ("XX", "T1") else None
     try:
         lat = float(req.headers.get("cf-iplatitude", ""))
         lon = float(req.headers.get("cf-iplongitude", ""))
     except ValueError:
-        return {"lat": None, "lon": None}
-    return {"lat": lat, "lon": lon, "city": req.headers.get("cf-ipcity")}
+        return {"lat": None, "lon": None, "country": country}
+    return {"lat": lat, "lon": lon, "city": req.headers.get("cf-ipcity"), "country": country}
 
 
 @app.get("/healthz")

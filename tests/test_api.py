@@ -587,3 +587,10 @@ def test_qr_codes(client):
     assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml") and b"<svg" in r.content
     assert client.get("/qr.svg").status_code == 200                     # the "test where I am" link
     assert client.get("/qr.svg", params={"p": "../etc"}).status_code == 404
+
+
+@pytest.mark.parametrize("hdr, want", [("SG", "SG"), ("in", "IN"), ("XX", None), ("T1", None), ("", None), ("1A", None)])
+def test_whereami_country(client, hdr, want):
+    h = {"cf-ipcountry": hdr, "cf-iplatitude": "1.29", "cf-iplongitude": "103.85"}
+    assert client.get("/api/whereami", headers=h).json()["country"] == want
+    assert client.get("/api/whereami", headers={"cf-ipcountry": hdr}).json() == {"lat": None, "lon": None, "country": want}

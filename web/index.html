@@ -25,7 +25,7 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=7" />
   <link rel="preconnect" href="https://maps.googleapis.com" />
   <link rel="preload" href="/fonts/geist-latin.woff2?v=1" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="/style.css?v=34" />
+  <link rel="stylesheet" href="/style.css?v=35" />
 </head>
 <body>
   <div id="map" aria-label="Map of places and their internet speeds" data-map-id="__GOOGLE_MAP_ID__"></div>
@@ -56,6 +56,7 @@
   <!-- First visit only (app.js): pitch over the map; any map gesture, search or place dismisses it for good. -->
   <section class="hero" id="hero" aria-labelledby="hero-h" hidden>
     <div class="hero-in">
+      <p class="hero-notice" id="hero-notice" hidden><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5L2.5 20h19L12 3.5z"/><path d="M12 10v4.5M12 17.5v.01"/></svg>We’re not live in your country yet</p>
       <h1 id="hero-h">Find the <em>Fastest Internet</em> Near You</h1>
       <ul class="usps">
         <li><span class="usp-ic"><span class="ic ic-speed" aria-hidden="true"></span></span>Community-reported true speeds</li>
@@ -64,6 +65,7 @@
       </ul>
       <div class="hero-act">
         <button class="btn primary lg" id="hero-go" type="button"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.5"/></svg>Find fast WiFi near me</button>
+        <button class="btn primary lg" id="hero-india" type="button" hidden><img src="/icons/speed-white.png?v=1" alt="" width="20" height="20" />Check speeds in India</button>
         <span class="hero-hint">or drag the map to explore</span>
       </div>
     </div>
@@ -142,6 +144,6 @@
     });
   </script>
   <script src="/speedtest.js?v=16"></script>
-  <script src="/app.js?v=47"></script>
+  <script src="/app.js?v=48"></script>
 </body>
 </html>
