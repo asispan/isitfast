@@ -53,7 +53,9 @@ signs a cumulative receipt every 4 MiB of download and one per upload. `POST …
 (3 s–15 min old, used once) and, when receipts are present, the claimed speeds must be within 2× of what
 the Worker actually transferred (download bounded by the Worker-clock download phase, upload by arrival
 times). If our Worker is unreachable the test falls back to `speed.cloudflare.com` and is stored with
-`verified=0`. Carrier/ISP comes only from the ASN Cloudflare saw (`x-visitor-asn`), never the client.
+`verified=0`. Carrier/ISP comes only from the ASN Cloudflare saw (`x-visitor-asn`), never the client. Because those
+edge headers are trusted, the origin serves only requests carrying a secret `X-Origin-Auth` header that a
+Cloudflare transform rule adds (`ORIGIN_SECRET`); requests sent straight to the server get 403.
 
 **Background jobs** (`entrypoint.sh`): weekly Ookla (new quarter only), M-Lab (new month only) and OSM
 places for the seeded cities (`app/seed.py`, every 6 days); daily backup. Ingests build a new database

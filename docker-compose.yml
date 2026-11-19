@@ -9,6 +9,7 @@ services:
       - IP_SALT=${IP_SALT:-change-me}
       - RECEIPT_KEY=${RECEIPT_KEY:-}
       - METRICS_TOKEN=${METRICS_TOKEN:-}
+      - ORIGIN_SECRET=${ORIGIN_SECRET:-}
       - GOOGLE_MAPS_KEY=${GOOGLE_MAPS_KEY:-}
       - GOOGLE_MAP_ID=${GOOGLE_MAP_ID:-}
     volumes:

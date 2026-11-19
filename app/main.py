@@ -1159,6 +1159,21 @@ async def static_cache_headers(request: Request, call_next):
     return resp
 
 
+# Origin lock: when ORIGIN_SECRET is set, only requests carrying it in X-Origin-Auth are served. A Cloudflare
+# transform rule adds the header at the edge, so traffic sent straight to the server's IP (which could forge
+# cf-connecting-ip / x-visitor-asn) gets a 403. Unset = no check (local dev, tests).
+ORIGIN_SECRET = os.environ.get("ORIGIN_SECRET", "")
+
+
+@app.middleware("http")
+async def origin_lock(request: Request, call_next):
+    if ORIGIN_SECRET and request.url.path != "/healthz" and not hmac.compare_digest(
+            request.headers.get("x-origin-auth", "").encode("latin-1", "replace"), ORIGIN_SECRET.encode()):
+        metric("origin_lock", "rejected")
+        return Response("Forbidden", status_code=403, media_type="text/plain")
+    return await call_next(request)
+
+
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 

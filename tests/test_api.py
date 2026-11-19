@@ -457,3 +457,13 @@ def test_index_injects_maps_key(client, monkeypatch):
             assert "__GOOGLE_MAPS_KEY__" not in html and "<script>\"" not in html
     finally:
         main._index_html.cache_clear()
+
+
+def test_origin_lock(client, monkeypatch):
+    monkeypatch.setattr(main, "ORIGIN_SECRET", "s3cret-origin")
+    assert client.get("/about.html").status_code == 403                                   # no header (direct to IP)
+    assert client.get("/about.html", headers={"x-origin-auth": "wrong"}).status_code == 403
+    assert client.get("/about.html", headers={"x-origin-auth": "s3cret-origin"}).status_code == 200
+    assert client.get("/healthz").status_code == 200                                      # health stays open
+    monkeypatch.setattr(main, "ORIGIN_SECRET", "")
+    assert client.get("/about.html").status_code == 200                                   # unset = no lock
