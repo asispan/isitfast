@@ -252,14 +252,14 @@ body:has(.sidebar.open) .here-btn { display: none; }
 .muted.small { font-size: 12px; color: var(--ink-3); margin-top: 16px; }
 
 /* ---------- first-visit hero (Figma: Web/Mobile 01 · "First-visit hero") ----------
-   A bottom-up scrim over the map: clear at the top, panel-white at the bottom. The scrim lets map
-   gestures through (dragging the map dismisses it); only the content takes pointer events. It stops
-   above Google's footer row so the logo and terms stay visible. */
-.hero { position: absolute; z-index: 6; left: 0; right: 0; top: 42%; bottom: 26px; display: flex; align-items: flex-end; pointer-events: none;
-  background: linear-gradient(to bottom, rgba(251,250,247,0) 0%, rgba(251,250,247,.6) 35%, rgba(251,250,247,.92) 60%, rgba(251,250,247,.98) 100%);
-  /* soft bottom edge into the strip kept clear for Google's footer */
-  -webkit-mask-image: linear-gradient(to top, transparent, #000 18px); mask-image: linear-gradient(to top, transparent, #000 18px); }
-.hero-in { pointer-events: auto; padding: 0 40px 24px; max-width: 980px; }
+   A bottom-up scrim over the map: clear at the top, solid panel-white from just above the title down to
+   the very bottom edge (stops are in px from the bottom so the copy always sits on solid panel, whatever
+   the viewport height). The scrim lets map gestures through (dragging the map dismisses it); only the
+   content takes pointer events. Shown on first visit only, until the first interaction. */
+.hero { position: absolute; z-index: 6; left: 0; right: 0; top: 42%; bottom: 0; display: flex; align-items: flex-end; pointer-events: none;
+  --hero-solid: 320px;
+  background: linear-gradient(to top, var(--panel) 0, var(--panel) var(--hero-solid), rgba(251,250,247,.75) calc(var(--hero-solid) + 70px), rgba(251,250,247,0) 100%); }
+.hero-in { pointer-events: auto; padding: 0 40px 40px; max-width: 980px; }
 .hero h1 { margin: 0 0 24px; max-width: 640px; font-size: 56px; font-weight: 600; line-height: 1.04; letter-spacing: -.03em; text-wrap: balance; }
 .hero h1 em { font-style: normal; color: var(--ultra); }
 .usps { list-style: none; margin: 0 0 24px; padding: 0; display: flex; flex-wrap: wrap; gap: 12px 28px; }
@@ -316,9 +316,8 @@ body.hero-on .here-btn { display: none; }
   .gauges { gap: 8px; }
   .gauge { padding: 12px; }
   /* hero: starts clear just under the Mobile/WiFi toggle; stacked USPs, full-width CTA; Locate hides (the CTA locates) */
-  .hero { top: calc(max(8px, env(safe-area-inset-top)) + 110px); bottom: calc(16px + env(safe-area-inset-bottom));
-    background: linear-gradient(to bottom, rgba(251,250,247,0) 0%, rgba(251,250,247,.55) 30%, rgba(251,250,247,.92) 52%, rgba(251,250,247,.98) 100%); }
-  .hero-in { width: 100%; padding: 0 20px 14px; }
+  .hero { top: calc(max(8px, env(safe-area-inset-top)) + 110px); --hero-solid: 380px; }
+  .hero-in { width: 100%; padding: 0 20px calc(28px + env(safe-area-inset-bottom)); }
   .hero h1 { margin-bottom: 20px; font-size: 38px; line-height: 1.06; letter-spacing: -.025em; }
   .usps { flex-direction: column; gap: 12px; margin-bottom: 20px; }
   .hero-act { flex-direction: column; gap: 10px; }
