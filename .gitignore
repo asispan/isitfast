@@ -1,0 +1,17 @@
+data/
+.venv/
+__pycache__/
+*.pyc
+.env
+*.log
+# optional local modules
+app/local_*
+
+# local notes
+docs/
+
+# tool caches / local secrets
+.wrangler/
+.dev.vars
+node_modules/
+.pytest_cache/

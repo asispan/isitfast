@@ -1,0 +1,10 @@
+name = "isitfast-speed"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+# Custom domain on the isitfast.cloud zone (creates the DNS record).
+routes = [{ pattern = "speed.isitfast.cloud", custom_domain = true }]
+
+# Secret (shared with the origin's RECEIPT_KEY env var):
+#   npx wrangler secret put RECEIPT_KEY

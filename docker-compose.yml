@@ -1,0 +1,23 @@
+services:
+  isitfast:
+    build: .
+    image: isitfast:latest
+    container_name: isitfast
+    restart: unless-stopped
+    environment:
+      - DATA_DIR=/data
+      - IP_SALT=${IP_SALT:-change-me}
+      - RECEIPT_KEY=${RECEIPT_KEY:-}
+      - METRICS_TOKEN=${METRICS_TOKEN:-}
+      - GOOGLE_MAPS_KEY=${GOOGLE_MAPS_KEY:-}
+      - GOOGLE_MAP_ID=${GOOGLE_MAP_ID:-}
+    volumes:
+      - ./data:/data
+    networks:
+      - proxy
+    mem_limit: 1g
+
+networks:
+  proxy:
+    name: nginx-proxy-manager_proxy-network
+    external: true

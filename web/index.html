@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>isitfast.cloud — internet speeds at cafes & coworking spots</title>
+  <meta name="description" content="Find cafes and coworking spaces with fast WiFi and good mobile data. Published Ookla cellular speeds plus community WiFi tests, on a map." />
+  <meta name="theme-color" content="#FBFAF7" />
+  <link rel="icon" href="/favicon.svg?v=8" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=7" />
+  <link rel="preconnect" href="https://maps.googleapis.com" />
+  <link rel="preload" href="/fonts/geist-latin.woff2?v=1" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/style.css?v=30" />
+</head>
+<body>
+  <div id="map" aria-label="Map of places and their internet speeds" data-map-id="__GOOGLE_MAP_ID__"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="isitfast.cloud home">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="#2A3BD4" stroke-width="2.4"/><path d="M16 16H29M29 12.5v7" stroke="#2A3BD4" stroke-width="2.4" stroke-linecap="round"/><circle cx="16" cy="16" r="3.4" fill="#2A3BD4"/></svg><span class="brand-text">is<span class="wg">it</span><span class="wg">fast</span></span>
+    </a>
+    <a class="about-link" href="/about.html">About</a>
+    <button class="back" id="back" type="button" aria-label="Back to the map"><svg class="ic" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>Map</button>
+    <form class="search" id="search" role="search" autocomplete="off">
+      <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="q" type="search" placeholder="Search a place, area or city" aria-label="Search places" autocomplete="off" />
+      <ul id="results" class="results" hidden></ul>
+    </form>
+  </header>
+
+  <div class="controls">
+    <div class="seg" role="radiogroup" aria-label="Colour places by">
+      <button type="button" role="radio" aria-checked="true" data-mode="mobile"><svg class="ic" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Mobile data</button>
+      <button type="button" role="radio" aria-checked="false" data-mode="wifi"><svg class="ic" viewBox="0 0 24 24"><path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0M12 20h.01"/></svg>WiFi</button>
+    </div>
+  </div>
+
+  <div class="mapbtns">
+    <div class="zoom" role="group" aria-label="Zoom">
+      <button id="zoom-in" type="button" aria-label="Zoom in"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button id="zoom-out" type="button" aria-label="Zoom out"><svg class="ic" viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    </div>
+    <button class="locate" id="locate" type="button" title="Show my location" aria-label="Show my location"><svg class="ic" viewBox="0 0 24 24"><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.5"/></svg></button>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <aside class="sidebar" id="sidebar" aria-hidden="true" aria-label="Place details">
+    <div class="grab" id="grab" aria-hidden="true"></div>
+    <div class="sheet-scroll" id="sheet-scroll">
+      <div id="panel"></div>
+      <section class="testview" id="testview" hidden>
+        <form id="testform" onsubmit="return false">
+          <div class="tv-h">
+            <button type="button" class="backbtn" id="test-back" aria-label="Back to the place"><svg class="ic" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></button>
+            <h2>Test internet speed</h2>
+            <button type="button" class="x" id="test-x" aria-label="Close"><svg class="ic" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+            <p id="test-place"></p>
+          </div>
+          <fieldset class="net" id="netset">
+            <legend>What are you connected to right now?</legend>
+            <label><input type="radio" name="network" value="wifi" checked /> <span id="wifi-label">This place's WiFi</span></label>
+            <label><input type="radio" name="network" value="cellular" /> My mobile data</label>
+          </fieldset>
+          <div class="gauges">
+            <div class="gauge" id="gg-ping"><span class="g-label">Ping</span><span class="g-val idle" id="g-ping">–</span><span class="g-unit">ms</span></div>
+            <div class="gauge" id="gg-down"><span class="g-label">Download</span><span class="g-val idle" id="g-down">–</span><span class="g-unit">Mbps</span></div>
+            <div class="gauge" id="gg-up"><span class="g-label">Upload</span><span class="g-val idle" id="g-up">–</span><span class="g-unit">Mbps</span></div>
+          </div>
+          <p class="tstatus" id="test-status"></p>
+          <p class="receipt" id="test-receipt" hidden>Our server counts the bytes it sends and receives, and signs a receipt, so a result can't be faked.</p>
+          <div class="actions">
+            <button type="button" class="btn ghost" id="test-cancel">Cancel</button>
+            <button type="button" class="btn primary" id="test-run"><img src="/icons/speed-white.png?v=1" alt="" />Start test</button>
+          </div>
+        </form>
+      </section>
+    </div>
+    <div class="actionbar" id="actionbar">
+      <button class="cta" id="cta" type="button" aria-label="Test internet speed at this place">
+        <img class="cta-ic" src="/icons/speed-white.png?v=1" alt="" width="24" height="24" />
+        <span class="cta-l"><b>Test internet speed</b><small id="cta-name"></small></span>
+        <span class="cta-r">Start<svg class="ic" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Google Maps JS bootstrap loader (dynamic library import), from developers.google.com/maps/documentation/javascript/load-maps-js-api -->
+  <script>
+    (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]+"");for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src=`https://maps.${c}apis.com/maps/api/js?`+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({
+      key: "__GOOGLE_MAPS_KEY__", v: "weekly", region: "IN", language: "en"
+    });
+  </script>
+  <script src="/speedtest.js?v=16"></script>
+  <script src="/app.js?v=44"></script>
+</body>
+</html>
