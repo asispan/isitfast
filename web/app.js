@@ -14,7 +14,28 @@
     { max: Infinity, color: "#2234C8" },
   ];
   const NODATA = "#8E887B", ULTRA = "#2A3BD4", PANEL = "#FBFAF7";
-  const state = { mode: "mobile", features: new Map(), selected: null, me: null };
+  const state = { mode: "mobile", features: new Map(), selected: null, me: null, testedOnly: false };
+  // A test counts when the place is within TEST_RADIUS_M of you, widened by your device's reported accuracy
+  // (capped). Laptops often report ±100–150 m. Server: MAX_ACC_SLACK_M / PRECISE_ACC_M in app/main.py.
+  const MAX_ACC_SLACK_M = 150, PRECISE_ACC_M = 50;
+  const isTouch = matchMedia("(pointer: coarse)").matches;
+  const DEV = isTouch ? "m" : "d";
+
+  // ------------------------------------------------------------------ analytics (first-party, cookieless)
+  // One beacon per funnel step to /api/e. No cookies or storage; the server counts a visitor per day with a
+  // hash whose salt is thrown away daily. `?r=` is the attribution code of the link that brought you here.
+  const params = new URLSearchParams(location.search);
+  const REF = (params.get("r") || "").toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32) || null;
+  function track(n, p = {}) {
+    try {
+      const body = JSON.stringify({ n, r: REF, p: { dev: DEV, ...p } });
+      if (!(navigator.sendBeacon && navigator.sendBeacon("/api/e", new Blob([body], { type: "application/json" }))))
+        fetch("/api/e", { method: "POST", body, headers: { "content-type": "application/json" }, keepalive: true }).catch(() => {});
+    } catch {}
+  }
+  const bucket = (v, edges, labels) => (v == null ? "na" : labels[edges.findIndex((e) => v < e)] ?? labels[labels.length - 1]);
+  const accBucket = (a) => bucket(a, [20, 50, 150], ["lt20", "20-50", "50-150", "150plus"]);
+  const distBucket = (d) => bucket(d, [50, 200, 1000], ["lt50", "50-200", "200-1k", "1kplus"]);
 
   // ------------------------------------------------------------------ icons (1.7 stroke, 24 grid)
   const P = {
@@ -33,6 +54,9 @@
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.6v.4"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
     wifiOff: '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0"/><path d="M3 3l18 18"/>',
+    share: '<path d="M12 15V3M7.5 7.5L12 3l4.5 4.5"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/>',
+    link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>',
+    locate: '<path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.5"/>',
   };
   const ic = (n, cls = "") => `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${P[n]}</svg>`;
   const SPEED_IC = '<img src="/icons/speed-white.png?v=1" alt="" width="18" height="18" />';
@@ -43,12 +67,13 @@
   // Basemap: Google Maps (vector map, Map ID; its colours are set in the Cloud console style). Google's own
   // POIs open as venues; our own places (OSM cafes, coworking, restaurants, offices, apartments, plus any
   // tested place) are drawn as dots, and the tested ones as labelled pins.
-  let GMap, OverlayView, AdvancedMarkerElement, Place, AutocompleteSuggestion, AutocompleteSessionToken;
+  let GMap, OverlayView, AdvancedMarkerElement, Place, AutocompleteSuggestion, AutocompleteSessionToken, SearchNearbyRankPreference;
   try {
     ({ Map: GMap, OverlayView } = await google.maps.importLibrary("maps"));
     ({ AdvancedMarkerElement } = await google.maps.importLibrary("marker"));
-    ({ Place, AutocompleteSuggestion, AutocompleteSessionToken } = await google.maps.importLibrary("places"));
+    ({ Place, AutocompleteSuggestion, AutocompleteSessionToken, SearchNearbyRankPreference } = await google.maps.importLibrary("places"));
   } catch {
+    track("pageview", { land: "map_error" });
     $("#map").innerHTML = `<p class="map-err">Couldn't load the map — check your connection and reload.</p>`;
     return;
   }
@@ -104,7 +129,7 @@
       g.clearRect(0, 0, W, H);
       this.drawn = [];
       const z = zoom();
-      if (z >= MIN_ZOOM) {
+      if (z >= MIN_ZOOM && !state.testedOnly) {
         const all = z >= ALL_KINDS_ZOOM, r = z >= 16 ? 5 : z >= 15 ? 4.5 : 3.5;
         for (const f of state.features.values()) {
           const p = f.properties;
@@ -337,6 +362,12 @@
       redraw();
     })
   );
+  // "Tested only": hide the untested dots, keep the tested pins.
+  $("#tested-only").addEventListener("click", (e) => {
+    state.testedOnly = !state.testedOnly;
+    e.currentTarget.setAttribute("aria-pressed", state.testedOnly);
+    redraw();
+  });
 
   // ------------------------------------------------------------------ geolocation
   let meMarker = null, watchId = null;
@@ -365,7 +396,7 @@
         trackMe();
         flyTo(state.me.lat, state.me.lon, Math.max(zoom(), 16));
       },
-      () => (explicit ? toast("Location permission denied — search for a place instead") : ipFallback()),
+      () => (explicit ? toast("Location permission denied — search for a place instead") : firstViewFallback()),
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
     );
   }
@@ -374,6 +405,20 @@
       const r = await (await fetch("/api/whereami")).json();
       if (r.lat != null && !state.me) { map.setCenter(ll(r.lat, r.lon)); map.setZoom(14); }
     } catch {}
+  }
+  // First visit: open on the densest cluster of tested places (real results on the first screen) without
+  // asking for location. A visitor who already allowed location sees the map around them.
+  async function firstViewFallback() {
+    try {
+      const h = await (await fetch("/api/hotspot")).json();
+      if (h.lat != null && !state.me) { map.moveCamera({ center: ll(h.lat, h.lon), zoom: h.zoom || 15 }); return; }
+    } catch {}
+    ipFallback();
+  }
+  async function firstView() {
+    let granted = false;
+    try { granted = (await navigator.permissions.query({ name: "geolocation" })).state === "granted"; } catch {}
+    if (granted) locate(false); else firstViewFallback();
   }
   $("#locate").addEventListener("click", () => locate(true));
 
@@ -466,11 +511,11 @@
     scroller.addEventListener("touchend", end);
   })();
 
-  // An open place gets its own history entry, so the phone's Back gesture returns to the map.
-  // Switching places while open replaces that entry.
-  function markOpen(hash) {
-    if (sidebar.classList.contains("open") && history.state && history.state.panel) history.replaceState({ panel: 1 }, "", hash);
-    else history.pushState({ panel: 1 }, "", hash);
+  // An open place gets its own history entry (/p/<id>, a shareable URL), so the phone's Back gesture returns
+  // to the map. Switching places while open replaces that entry.
+  function markOpen(url) {
+    if (sidebar.classList.contains("open") && history.state && history.state.panel) history.replaceState({ panel: 1 }, "", url);
+    else history.pushState({ panel: 1 }, "", url);
   }
   addEventListener("popstate", () => { if (sidebar.classList.contains("open")) closePanel(true); });
   // The "Test internet speed" action is pinned to the bottom of the panel, and only shown while a place is
@@ -483,9 +528,36 @@
     return 2 * R * Math.asin(Math.sqrt(h));
   };
   const radiusFor = () => TEST_RADIUS_M; // one 50 m range for every place, apartments included (server: MAX_TEST_DISTANCE_M)
-  const inRange = () => !!(state.current && state.me && distM(state.me, state.current) <= radiusFor(state.current));
-  function updateCta() { document.body.classList.toggle("can-test", inRange()); redraw(); }
+  const slackM = (acc) => Math.min(acc || 0, MAX_ACC_SLACK_M);
+  const reachM = (acc) => TEST_RADIUS_M + slackM(acc); // how far a place can be and still count
+  const curDist = () => (state.current && state.me && state.current.lat != null ? distM(state.me, state.current) : null);
+  const inRange = () => { const d = curDist(); return d != null && d <= reachM(state.me.acc); };
+  const ctaSeen = new Set();
+  function updateCta() {
+    const ok = inRange();
+    document.body.classList.toggle("can-test", ok);
+    document.body.classList.toggle("has-place", !!state.current);
+    if (ok && !ctaSeen.has(state.current.id)) { ctaSeen.add(state.current.id); track("test_cta_shown", { acc: accBucket(state.me.acc) }); }
+    rangeHint();
+    redraw();
+  }
   function clearCta() { state.current = null; updateCta(); }
+  // Out of range: say how far away we think you are; on a laptop, offer the phone hand-off QR.
+  let handoffTracked = false;
+  function rangeHint() {
+    const p = state.current, d = curDist(), hint = $("#range-hint");
+    if (!p) return;
+    hint.textContent = d == null ? "" : `You're about ${d < 1000 ? `${Math.round(d / 10) * 10} m` : `${(d / 1000).toFixed(1)} km`} away`
+      + `${state.me.acc > PRECISE_ACC_M ? ` (your location is ±${Math.round(state.me.acc)} m)` : ""}. Tests unlock within ${radiusFor(p)} m of the place.`;
+    hint.hidden = !hint.textContent;
+    const ho = $("#handoff");
+    ho.hidden = isTouch || !p.id;
+    if (!ho.hidden) {
+      const src = `/qr.svg?p=${encodeURIComponent(p.id)}&r=handoff`;
+      if ($("#handoff-qr").getAttribute("src") !== src) $("#handoff-qr").src = src;
+      if (!handoffTracked && !inRange()) { handoffTracked = true; track("handoff_shown"); }
+    }
+  }
   $("#cta").addEventListener("click", () => { if (inRange()) openTest(state.current); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (testing) { if (!running) hideTest(); } else closePanel(); } });
 
@@ -498,21 +570,30 @@
     setSheet(false);
     clearCta();
     select(null);
-    history.replaceState(null, "", location.pathname);
+    history.replaceState(null, "", "/");
   }
 
-  function parseHash() { const m = /^#p=([nwr]\d+|s[0-9a-f]{11}|g[A-Za-z0-9_-]{10,300})$/.exec(location.hash); return m ? m[1] : null; }
-
-  // id: "n…/w…/r…" (OSM), "s…" (visitor-named), "g…" (Google place_id). gPlace: a Places API Place object
-  // from search, so its details call ends the autocomplete session.
-  async function openPlace(id, fresh = false, gPlace = null) {
-    if (running) return;
+  const PID_RE = /^([nwr]\d+|s[0-9a-f]{11}|g[A-Za-z0-9_-]{10,300})$/;
+  function parseRoute() { // /p/<id> (shareable), or the older #p=<id>
+    const m = /^\/p\/([^/]+)$/.exec(location.pathname) || /^#p=(.+)$/.exec(location.hash);
+    return m && PID_RE.test(m[1]) ? m[1] : null;
+  }
+  function openSheet(url) {
     hideTest();
     clearCta();
-    select(id);
-    markOpen(`#p=${id}`);
+    markOpen(url);
     sidebar.classList.add("open");
     sidebar.setAttribute("aria-hidden", "false");
+  }
+
+  // id: "n…/w…/r…" (OSM), "s…" (visitor-named), "g…" (Google place_id). gPlace: a Places API Place object
+  // from search, so its details call ends the autocomplete session. autoTest: open the speed test straight
+  // away if you're in range (the "Test where I am" flow).
+  async function openPlace(id, fresh = false, gPlace = null, autoTest = false) {
+    if (running) return;
+    hideHero();
+    select(id);
+    openSheet(`/p/${id}`);
     panel.innerHTML = `<div class="skeleton"><div></div><div></div><div></div><div></div></div>`;
     try {
       let info = null;
@@ -526,7 +607,7 @@
           if (state.selected !== id) return;
         }
         const twin = info && ourTwin(info);
-        if (twin && twin !== id) return openPlace(twin);
+        if (twin && twin !== id) return openPlace(twin, false, null, autoTest);
         // untested Google place: our server previews it at Google's position (used for this request only)
         if (info && info.lat != null) { qs.set("lat", info.lat.toFixed(6)); qs.set("lon", info.lon.toFixed(6)); }
       }
@@ -536,7 +617,7 @@
       const p = await r.json();
       if (state.selected !== id) return;
       if (p.google) Object.assign(p, info ? { name: info.name, kind: info.kind, addr: info.addr, gurl: info.url } : { name: "This place" });
-      showPlace(p);
+      showPlace(p, autoTest);
     } catch {
       panel.innerHTML = `<div class="ph"><span></span>${closeBtn()}</div><div class="state-err"><div class="badge">${ic("alert")}</div>
         <h2 style="margin:0 0 8px;font-size:22px;font-weight:600">Couldn’t load this place.</h2>
@@ -549,14 +630,17 @@
   const closeBtn = () => `<button class="x" type="button" data-close aria-label="Close">${ic("x")}</button>`;
   function wireClose() { panel.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => closePanel())); }
 
-  function showPlace(p) {
+  function showPlace(p, autoTest = false) {
     panel.innerHTML = renderPlace(p);
     wireClose();
     state.current = p;
     $("#cta-name").textContent = p.name;
     updateCta();
+    track("panel_open", { tested: !!(p.wifi || (p.carriers || []).some((c) => c.source === "here")), kind: String(p.kind || "place").slice(0, 32) });
     if (!state.me) trackMe(); // no fix yet: ask once, the CTA appears if we turn out to be here
     panel.querySelector("#first-test")?.addEventListener("click", () => { if (inRange()) openTest(p); });
+    panel.querySelector("#share-place")?.addEventListener("click", () => sharePlace(p));
+    if (autoTest && inRange()) openTest(p);
     if (!pins.has(p.id)) markSpot(p);
     reveal(p.lat, p.lon);
   }
@@ -642,7 +726,12 @@
   const ispName = (isp, many) => (ispLogo(isp) === null || !isp ? (many && isp ? `${isp} broadband` : "Broadband") : isp);
   function wifiBlock(p) {
     const rows = p.wifi_isps?.length ? p.wifi_isps : p.wifi ? [{ isp: p.wifi.isp, here: p.wifi }] : [];
-    if (!rows.length) return "";
+    if (!rows.length) {
+      // Tested on mobile data only: say plainly that the WiFi is still unknown.
+      if (!(p.carriers || []).some((c) => c.source === "here")) return "";
+      return `<section class="sec"><h3 class="sec-h">${ic("wifi")}WiFi speed</h3>
+        <p class="muted">No WiFi test yet. Be the first (20 s) next time you're here.</p></section>`;
+    }
     const many = rows.length > 1;
     return `<section class="sec">
       <h3 class="sec-h">${ic("wifi")}${many ? `WiFi speed · ${rows.length} providers` : "WiFi speed"}</h3>
@@ -659,11 +748,11 @@
     for (const r of isps) cands.push({ v: r.here, label: ispName(r.isp, true), wifi: true });
     for (const c of p.carriers || []) if (c.source === "here") cands.push({ v: c.here, label: `${c.carrier} mobile data`, logo: c.carrier });
     if (!cands.length) return `<section class="sec">
-        <h3 class="sec-h">${ic("flag")}No one has tested here yet</h3>
+        <h3 class="sec-h">${ic("flag")}No WiFi test yet</h3>
         <p class="muted">${p.residential
-          ? `Test your WiFi and mobile data at ${esc(p.name)} — it helps neighbours and anyone moving in compare providers.`
-          : `Run the first speed test and put ${esc(p.name)} on the map for everyone looking for fast internet.`}</p>
-        <button class="btn primary wide in-range-only" id="first-test" type="button">${SPEED_IC}Run the first speed test</button>
+          ? `Be the first to test ${esc(p.name)} — it takes 20 seconds and helps neighbours and anyone moving in compare providers.`
+          : `Be the first: a 20-second test, run while you're at ${esc(p.name)}. It puts this ${venueNoun(p.kind)} on the map for everyone looking for fast internet.`}</p>
+        <button class="btn primary wide in-range-only" id="first-test" type="button">${SPEED_IC}Run the first speed test (20 s)</button>
         <p class="range-note out-range-only">${ic("pin")}You need to be here (within ${radiusFor(p)} m) to run a test.</p>
       </section>`;
     const best = cands.reduce((a, b) => (b.v.down_mbps > a.v.down_mbps ? b : a));
@@ -701,6 +790,7 @@
           ${t.opening_hours ? `<span class="chip" title="Opening hours">${ic("clock")}${esc(t.opening_hours)}</span>` : ""}
           ${web ? `<a class="chip link" href="${esc(web)}" target="_blank" rel="noopener nofollow">Website${ic("ext")}</a>` : ""}
           <a class="chip link" href="${esc(p.gurl || `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`)}" target="_blank" rel="noopener">${p.gurl ? "Google Maps" : "Directions"}${ic("ext")}</a>
+          ${p.id && !p.preview ? `<button class="chip link" type="button" id="share-place">${ic("share")}Share</button>` : ""}
         </p>
       </div>
 
@@ -713,7 +803,7 @@
       ${ooklaBlock(fixed, "Home/office broadband nearby", "home")}
 
       ${p.recent_tests?.length ? accordion("clock", "Recent tests", `<ul class="recent">
-        ${p.recent_tests.map((x) => `<li><span>${x.network === "wifi" ? ic("wifi") + "WiFi" : clogo(x.carrier, "sm") + esc(x.carrier)}</span><span class="d">↓ ${fmt(x.down_mbps)}</span><span class="u">↑ ${fmt(x.up_mbps)}</span><span class="when">${ago(x.at)}</span></li>`).join("")}
+        ${p.recent_tests.map((x) => `<li><span>${x.network === "wifi" ? ic("wifi") + "WiFi" : clogo(x.carrier, "sm") + esc(x.carrier)}</span><span class="d">↓ ${fmt(x.down_mbps)}</span><span class="u">↑ ${fmt(x.up_mbps)}</span><span class="when">${x.approx ? tip("Location was approximate (laptop) when this was tested", "≈ ", "dotted") : ""}${ago(x.at)}</span></li>`).join("")}
       </ul>`) : ""}
 
       <p class="foot">${p.google
@@ -743,6 +833,7 @@
   function openTest(p, preset) {
     testPlace = p;
     testing = true;
+    $("#test-share").hidden = true;
     document.body.classList.add("testing");
     $("#wifi-label").textContent = p.residential ? "This building's WiFi / broadband" : "This place's WiFi";
     $("#test-place").textContent = inRange() ? `${p.name} · you’re inside the ${radiusFor(p)} m range` : p.name;
@@ -781,28 +872,80 @@
     return new Promise((res, rej) =>
       navigator.geolocation
         ? navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 })
-        : rej(new Error("no geolocation"))
+        : rej({ code: 2 })
     );
   }
 
-  // Anonymous beacon so we can see which speed endpoint ran tests and how much data they used.
-  function beacon(result, outcome, network) {
-    const m = result?.meta;
-    if (!m || !navigator.sendBeacon || result._beaconed) return;
-    result._beaconed = true;
-    const body = { endpoint: m.endpoint, own_failed: m.own_failed, outcome, network, down_mb: m.down_mb, up_mb: m.up_mb };
-    navigator.sendBeacon("/api/telemetry", new Blob([JSON.stringify(body)], { type: "application/json" }));
+  // ------------------------------------------------------------------ location gate: readable failures
+  // Every way "are you at the place?" can fail gets its own message and an anonymous gate_fail event
+  // (reason + accuracy/distance buckets, never coordinates). On a laptop, the fix is usually the phone.
+  class GateError extends Error { constructor(reason, msg) { super(msg); this.reason = reason; } }
+  const handoffHtml = (id) => isTouch ? "" : `<span class="ho-inline"><img src="/qr.svg?${id ? `p=${encodeURIComponent(id)}&` : ""}r=handoff" alt="QR code to open this on your phone" width="88" height="88" />
+    <span>Scan with your phone's camera to open this there.</span></span>`;
+  function geoError(err) {
+    if (err && err.code === 1) return new GateError("denied", isTouch
+      ? "Location is blocked for this site. Allow it in your browser's site settings (the icon next to the address), then try again."
+      : "Location is blocked for isitfast.cloud. Allow it from the icon next to the address bar (on a Mac, also System Settings → Privacy & Security → Location Services → your browser), or test from your phone:");
+    if (err && err.code === 3) return new GateError("timeout", isTouch
+      ? "Finding your location took too long. Step near a window or turn on precise location, then try again."
+      : "Finding your location took too long. Laptops locate themselves using WiFi — make sure WiFi is on, or test from your phone:");
+    return new GateError("unavailable", isTouch
+      ? "Couldn't get your location. Turn on location (GPS) for your browser, then try again."
+      : "Couldn't get your location. Laptops locate themselves using WiFi — make sure WiFi is on, or test from your phone:");
+  }
+  // Checks the server repeats; done here first so the visitor gets the reason without a round trip.
+  function checkGate(p, me) {
+    const d = distM(me, p), acc = me.acc || 0;
+    if (acc > MAX_ACC_SLACK_M) return new GateError("coarse", `Your device only knows where it is to within ±${Math.round(acc)} m — too rough to confirm you're at ${esc(p.name)}.${isTouch ? " Turn on precise location and try again." : " Phones are accurate to a few metres; test from your phone:"}`);
+    if (p.google && p.preview && acc > PRECISE_ACC_M) return new GateError("coarse_new", `This would be the first test at ${esc(p.name)}, which pins it where you're standing — your location (±${Math.round(acc)} m) is too rough for that.${isTouch ? " Turn on precise location and try again." : " Run the first test from your phone:"}`);
+    if (d > reachM(acc)) return new GateError("too_far", `You're about ${d < 1000 ? `${Math.round(d / 10) * 10} m` : `${(d / 1000).toFixed(1)} km`} from ${esc(p.name)}${acc > PRECISE_ACC_M ? ` (your location is ±${Math.round(acc)} m)` : ""}. Tests only count within ${radiusFor(p)} m of the place, so results are real.`);
+    return null;
+  }
+  function gateFail(e, me, p) {
+    track("gate_fail", { reason: e.reason, acc: accBucket(me?.acc), dist: distBucket(me && p && p.lat != null ? distM(me, p) : null) });
+    const qr = ["denied", "timeout", "unavailable", "coarse", "coarse_new"].includes(e.reason) ? handoffHtml(p?.id) : "";
+    return `${e.message}${qr}`; // message parts with place names are escaped where they're built
+  }
+
+  // ------------------------------------------------------------------ share
+  const areaOf = (p) => (p.tags && (p.tags["addr:suburb"] || p.tags["addr:city"])) || (p.addr ? p.addr.split(",").pop().trim() : "");
+  const placeLink = (id, ch) => `${location.origin}/p/${id}?r=${ch}`;
+  function shareTo(ch, text, id, title) {
+    track("share_click", { ch });
+    const url = placeLink(id, ch === "native" ? "share" : ch);
+    if (ch === "whatsapp") open(`https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}`, "_blank", "noopener");
+    else if (ch === "x") open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`, "_blank", "noopener");
+    else if (ch === "native") navigator.share({ title, text, url }).catch(() => {});
+    else navigator.clipboard?.writeText(`${text} ${url}`).then(() => toast("Link copied"), () => toast(url, 8000));
+  }
+  function showShare(p, body, result, network) {
+    const net = body.network === "wifi" ? "the WiFi" : `${body.carrier} mobile data`;
+    const area = areaOf(p);
+    const text = `Just clocked ${fmt(result.down_mbps)}↓ / ${fmt(result.up_mbps)}↑ Mbps on ${net} at ${p.name}${area && !p.name.includes(area) ? `, ${area}` : ""}. Check a cafe's internet before you go:`;
+    const box = $("#test-share");
+    box.querySelector("[data-ch=native]").hidden = !navigator.share;
+    box.onclick = (e) => { const b = e.target.closest("button[data-ch]"); if (b) shareTo(b.dataset.ch, text, body.id || p.id, p.name); };
+    box.hidden = false;
+  }
+  function sharePlace(p) {
+    const best = p.wifi ? `WiFi here: ${fmt(p.wifi.down_mbps)}↓ / ${fmt(p.wifi.up_mbps)}↑ Mbps, tested ${ago(p.wifi.latest)}.` : "Internet speeds tested on site.";
+    const text = `${p.name} — ${best}`;
+    shareTo(navigator.share && isTouch ? "native" : "copy", text, p.id, p.name);
   }
 
   runBtn.addEventListener("click", async () => {
     if (running || !testPlace) return;
     if (runBtn.dataset.done) { delete runBtn.dataset.done; hideTest(); openPlace(testPlace.id, true); refreshFeature(testPlace); return; }
-    let result = null;
+    let result = null, me = null, started = false;
     running = true; setRun("Testing…", true); cancelBtn.disabled = true; $("#netset").disabled = true;
     try {
       setStatus("run", "Checking you’re at the place…");
       let pos;
-      try { pos = await getPosition(); } catch { throw new Error("Location is needed to confirm you’re at the place. Allow location for isitfast.cloud, then try again."); }
+      try { pos = await getPosition(); } catch (err) { throw geoError(err); }
+      setMe(pos);
+      me = state.me;
+      const gate = checkGate(testPlace, me);
+      if (gate) throw gate;
       const here = { lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy_m: pos.coords.accuracy };
       // An untested Google place has no stored location yet: send where Google puts it (checked against
       // your position, not stored — the place is saved at your position).
@@ -812,14 +955,18 @@
         body: JSON.stringify({ ...here, spot }),
       });
       const start = await sr.json().catch(() => ({}));
-      if (!sr.ok) throw new Error(typeof start.detail === "string" ? start.detail : "Couldn't start the test.");
+      if (!sr.ok) {
+        const msg = typeof start.detail === "string" ? start.detail : "Couldn't start the test.";
+        throw sr.status === 422 ? new GateError("server_422", esc(msg)) : sr.status === 429 ? new GateError("rate", esc(msg)) : new Error(msg);
+      }
+      started = true;
+      track("test_start", { net: netVal(), acc: accBucket(here.accuracy_m) });
       testPlace.id = start.id; // a previewed place is stored now that someone is testing it
       testPlace.preview = false;
-      let phase = "ping";
       result = await SpeedTest.run({
         network: netVal(),
         sid: start.sid,
-        onPhase: (s) => { setStatus("run", esc(s)); if (/download/i.test(s)) phase = "down"; if (/upload/i.test(s)) phase = "up"; },
+        onPhase: (s) => setStatus("run", esc(s)),
         onPing: (v) => gauge("ping", Math.round(v), "live"),
         onDown: (v) => { gauge("ping", $("#g-ping").textContent, "done"); gauge("down", fmt(v), "live"); },
         onUp: (v) => { gauge("down", $("#g-down").textContent, "done"); gauge("up", fmt(v), "live"); },
@@ -837,20 +984,112 @@
       const body = await r.json().catch(() => ({}));
       beacon(result, r.ok ? "saved" : "rejected", network);
       if (!r.ok) throw new Error(body.detail && typeof body.detail === "string" ? body.detail : "Couldn't save the result.");
+      track("test_complete", { net: body.network, verified: !!body.verified, approx: !!body.approx });
       setStatus("ok", body.network === "wifi" && network === "cellular"
         ? `Saved as WiFi — ${clogo(body.carrier, "sm")}${esc(body.carrier)} is a broadband network, not mobile data. Thanks!`
-        : `Saved. Thanks! Network: ${clogo(body.carrier, "sm")}${esc(body.carrier)}.`);
+        : `Saved. Thanks! Network: ${clogo(body.carrier, "sm")}${esc(body.carrier)}.${body.approx ? " Marked as approximate location." : ""}`);
+      showShare(testPlace, { ...body, id: testPlace.id }, result, network);
       cancelBtn.hidden = true; tv.querySelector(".actions").classList.add("one");
       runBtn.dataset.done = "1"; setRun("Done", false);
     } catch (e) {
       beacon(result, "failed", netVal());
-      setStatus("bad", esc(e.message || "Test failed."));
+      if (e instanceof GateError) setStatus("bad", gateFail(e, me, testPlace));
+      else { if (started) track("test_fail", { reason: result ? "save" : "run" }); setStatus("bad", esc(e.message || "Test failed.")); }
       ["ping", "down", "up"].forEach((k) => { const el = $(`#g-${k}`); gauge(k, el.textContent, el.textContent === "–" ? "idle" : "done"); });
       setRun("Try again", false, true); cancelBtn.disabled = false; $("#netset").disabled = false;
     } finally { running = false; }
   });
 
+  // Anonymous beacon so we can see which speed endpoint ran tests and how much data they used.
+  function beacon(result, outcome, network) {
+    const m = result?.meta;
+    if (!m || !navigator.sendBeacon || result._beaconed) return;
+    result._beaconed = true;
+    const body = { endpoint: m.endpoint, own_failed: m.own_failed, outcome, network, down_mb: m.down_mb, up_mb: m.up_mb };
+    navigator.sendBeacon("/api/telemetry", new Blob([JSON.stringify(body)], { type: "application/json" }));
+  }
+
   function refreshFeature(p) { loadPlaces(tileKey(p.lat, p.lon)); }
+
+  // ------------------------------------------------------------------ "Test where I am"
+  // One tap: locate, list the places you could be in (ours + Google's nearby POIs), pick one, test it.
+  const NEARBY_SKIP = /^(atm|parking|bus_stop|bus_station|transit_station|train_station|subway_station|light_rail_station|gas_station|electric_vehicle_charging_station|public_bathroom|place_of_worship|hindu_temple|mosque|church|route|locality|sublocality.*|political|street_address|premise|plus_code|neighborhood|park)$/;
+  let herePicks = [];
+  async function testHere() {
+    if (running) return;
+    track("here_click");
+    toast("Finding where you are…", 0, true);
+    let pos;
+    try { pos = await getPosition(); } catch (err) { hideToast(); return showHereError(geoError(err), null); }
+    hideToast();
+    setMe(pos);
+    trackMe();
+    const me = state.me, acc = me.acc || 0;
+    if (acc > MAX_ACC_SLACK_M) return showHereError(new GateError("coarse", `Your device only knows where it is to within ±${Math.round(acc)} m — too rough to tell which place you're in.${isTouch ? " Turn on precise location and try again." : " Phones are accurate to a few metres; test from your phone:"}`), me);
+    const reach = reachM(acc);
+    flyTo(me.lat, me.lon, Math.max(zoom(), 17));
+    const k = tileKey(me.lat, me.lon);
+    if (!tiles.has(k)) { try { await fetchTile(k); publishFeatures(); } catch {} }
+    const near = new Map(); // id -> { id, name, kind, d, tested, gPlace }
+    for (const f of state.features.values()) {
+      const [lon, lat] = f.geometry.coordinates, d = distM(me, { lat, lon }), p = f.properties;
+      if (d <= reach + 30) near.set(p.id, { id: p.id, name: p.name, kind: p.kind, d, tested: !!p.t });
+    }
+    try {
+      const { places } = await Place.searchNearby({
+        fields: ["id", "displayName", "location", "primaryType"],
+        locationRestriction: { center: ll(me.lat, me.lon), radius: Math.min(reach + 30, 250) },
+        maxResultCount: 20,
+        rankPreference: SearchNearbyRankPreference?.DISTANCE ?? "DISTANCE",
+      });
+      for (const g of places || []) {
+        if (!g.location || NEARBY_SKIP.test(g.primaryType || "")) continue;
+        const info = { name: g.displayName, lat: g.location.lat(), lon: g.location.lng() };
+        const d = distM(me, info), ours = near.get(`g${g.id}`);
+        if (ours) { ours.name ||= g.displayName; ours.gPlace = g; continue; } // a tested Google place: we keep no name
+        if (ourTwin(info)) continue; // already listed as our OSM/visitor place
+        near.set(`g${g.id}`, { id: `g${g.id}`, name: g.displayName, kind: googleKind(g.primaryType), d, tested: false, gPlace: g });
+      }
+    } catch {}
+    // In range first; within that, places already tested, then places people work from, then by distance
+    // (indoor GPS can't tell neighbouring shops apart, so distance alone puts the wrong shop first).
+    const WORKY = /cafe|coffee|cowork|restaurant|bakery|tea|bar|pub|hotel|lodging|library|office|food|apartments/;
+    const rank = (x) => (x.d <= reach ? 0 : 100) + (x.tested ? 0 : 10) + (WORKY.test(x.kind || "") ? 0 : 5);
+    herePicks = [...near.values()].filter((x) => x.name).sort((a, b) => rank(a) - rank(b) || a.d - b.d).slice(0, 12);
+    showHerePicker(me, reach);
+  }
+  function showHerePicker(me, reach) {
+    select(null);
+    openSheet("/");
+    const rows = herePicks.map((x, i) => {
+      const ok = x.d <= reach;
+      return `<li><button type="button" data-i="${i}" class="${ok ? "" : "far"}">
+        <span class="hl-name">${esc(x.name)}</span>
+        <span class="hl-sub">${esc(kindLabel(x.kind))} · ${Math.round(x.d)} m${x.tested ? ` · <b class="hl-tested">Tested</b>` : ""}</span>
+        <span class="hl-go">${ok ? `Test${ic("chev")}` : "Too far"}</span></button></li>`;
+    }).join("");
+    panel.innerHTML = `<div class="ph"><h2>Where are you?</h2>${closeBtn()}
+        <p class="meta-line">Places within ${reach} m of you${me.acc > PRECISE_ACC_M ? ` (your location is ±${Math.round(me.acc)} m)` : ""}. Pick the one you're in.</p></div>
+      ${herePicks.length ? `<ul class="here-list">${rows}</ul>` : `<p class="muted">We couldn't find a cafe, coworking space or other place right where you are.</p>`}
+      <p class="muted small">Not listed? Close this and tap your place on the map.</p>`;
+    wireClose();
+    panel.querySelector(".here-list")?.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-i]");
+      if (!b) return;
+      const x = herePicks[+b.dataset.i];
+      openPlace(x.id, false, x.gPlace || null, true);
+    });
+  }
+  function showHereError(e, me) {
+    select(null);
+    openSheet("/");
+    panel.innerHTML = `<div class="ph"><h2>Test where you are</h2>${closeBtn()}</div>
+      <div class="state-err"><div class="badge">${ic("locate")}</div><p class="here-err">${gateFail(e, me, null)}</p>
+      <button class="btn ghost wide" type="button" id="here-retry">Try again</button></div>`;
+    wireClose();
+    panel.querySelector("#here-retry").addEventListener("click", testHere);
+  }
+  $("#here").addEventListener("click", testHere);
 
   // ------------------------------------------------------------------ toast
   let toastT;
@@ -862,8 +1101,38 @@
   }
   function hideToast() { $("#toast").hidden = true; }
 
+  // ------------------------------------------------------------------ first-visit hero
+  // Shown once, on a plain map landing. The first real interaction (dragging or tapping the map, searching,
+  // switching Mobile/WiFi, opening a place, Escape) dismisses it and a localStorage flag keeps it gone.
+  // The flag is a yes/no for this browser only; it is never sent anywhere.
+  const HERO_KEY = "isitfast.hero.seen", heroEl = $("#hero");
+  let heroOn = false;
+  function heroSeen() { try { return localStorage.getItem(HERO_KEY) === "1"; } catch { return false; } }
+  function showHero() { heroOn = true; heroEl.hidden = false; document.body.classList.add("hero-on"); }
+  function hideHero() {
+    if (!heroOn) return;
+    heroOn = false; heroEl.hidden = true; document.body.classList.remove("hero-on");
+    try { localStorage.setItem(HERO_KEY, "1"); } catch {}
+  }
+  map.addListener("dragstart", hideHero);
+  map.addListener("click", hideHero);
+  q.addEventListener("focus", hideHero);
+  document.querySelectorAll(".seg button, #tested-only").forEach((b) => b.addEventListener("click", hideHero));
+  addEventListener("keydown", (e) => { if (e.key === "Escape") hideHero(); });
+  $("#hero-go").addEventListener("click", () => {
+    hideHero();
+    const wifi = document.querySelector('.seg button[data-mode="wifi"]');
+    if (wifi && wifi.getAttribute("aria-checked") !== "true") wifi.click();
+    locate(true);
+  });
+
   // ------------------------------------------------------------------ boot
-  const fromHash = parseHash();
-  if (fromHash) { history.replaceState(null, "", location.pathname); openPlace(fromHash); } // Back → the map, not the same place
-  else locate(false);
+  const fromRoute = parseRoute(), goHere = params.get("go") === "here";
+  let rh = "";
+  try { rh = document.referrer ? new URL(document.referrer).host : ""; } catch {}
+  track("pageview", { land: fromRoute ? "place" : goHere ? "here" : "map", ...(rh && rh !== location.host ? { rh } : {}) });
+  history.replaceState(null, "", "/"); // Back → the map, not the same place; drops ?r= from the address bar
+  if (fromRoute) openPlace(fromRoute);
+  else if (goHere) testHere();
+  else { firstView(); if (!heroSeen()) showHero(); }
 })();

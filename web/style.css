@@ -174,6 +174,18 @@ details.acc .acc-body { padding-bottom: 6px; }
 /* ---------- sticky "Test internet speed" action (only within range of the open place) ---------- */
 .actionbar { display: none; flex: none; padding: 14px 16px; border-top: 1px solid var(--line); background: var(--panel); }
 body.can-test:not(.testing) .actionbar { display: block; }
+/* Out of range: how far away we think you are, and on a laptop the "test from your phone" QR. */
+body.has-place:not(.testing):not(.can-test) .actionbar:has(#range-hint:not([hidden]), #handoff:not([hidden])) { display: block; }
+body.can-test .offrange, body:not(.can-test) .cta { display: none; }
+.range-hint { margin: 0; font-size: 13px; color: var(--ink-2); }
+.range-hint + .handoff:not([hidden]) { margin-top: 10px; }
+.handoff { display: flex; gap: 14px; align-items: center; }
+.handoff img { flex: none; width: 76px; height: 76px; border-radius: 8px; border: 1px solid var(--line); background: var(--white); }
+.handoff b { display: block; font-size: 14px; font-weight: 600; }
+.handoff span { display: block; font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.ho-inline { display: flex; gap: 12px; align-items: center; margin-top: 12px; color: var(--ink-2); font-size: 12px; font-weight: 400; }
+.ho-inline img { flex: none; width: 88px; height: 88px; border-radius: 8px; border: 1px solid var(--line); background: var(--white); }
+.here-err { margin: 0 0 16px; font-size: 14px; color: var(--ink); }
 .cta { display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 16px; border: 0; border-radius: 16px; background: var(--ultra); color: var(--white); text-align: left; cursor: pointer; box-shadow: 0 8px 24px rgba(31,45,168,.28); }
 .cta:hover { background: var(--ultra-ink); }
 .cta-ic { flex: none; width: 40px; height: 40px; padding: 8px; border-radius: 10px; background: rgba(255,255,255,.16); }
@@ -212,6 +224,53 @@ body.can-test:not(.testing) .actionbar { display: block; }
 .actions { display: grid; grid-template-columns: 120px 1fr; gap: 12px; margin-top: 24px; }
 .actions .btn { height: 52px; }
 .actions.one { grid-template-columns: 1fr; }
+.share { margin-top: 20px; padding: 16px; border-radius: 14px; background: var(--ultra-soft); }
+.share-h { margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--ultra-ink); }
+.share-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.share-btns .btn { height: 40px; padding: 0 14px; font-size: 14px; }
+.share-btns .btn .ic { width: 18px; height: 18px; }
+
+/* ---------- "Tested only" filter + "Test where I am" ---------- */
+.controls { display: flex; gap: 8px; align-items: center; }
+.chip-toggle { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow-sm); font: inherit; font-size: 12px; font-weight: 500; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.chip-toggle .ic { width: 16px; height: 16px; opacity: .35; }
+.chip-toggle[aria-pressed="true"] { background: var(--ultra); border-color: var(--ultra); color: var(--white); }
+.chip-toggle[aria-pressed="true"] .ic { opacity: 1; }
+.here-btn { position: absolute; z-index: 4; left: calc(var(--panel-w) + 2 * var(--gap) + (100% - var(--panel-w) - 2 * var(--gap)) / 2); bottom: 36px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 22px 0 18px; border: 0; border-radius: 26px; background: var(--ultra); color: var(--white); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgba(31,45,168,.32); white-space: nowrap; }
+.here-btn:hover { background: var(--ultra-ink); }
+body:has(.sidebar.open) .here-btn { display: none; }
+.toast { bottom: 104px; }
+.here-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+.here-list button { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.here-list button:hover { border-color: var(--ultra); background: var(--ultra-soft); }
+.here-list button.far { opacity: .6; }
+.hl-name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-sub { grid-row: 2; font-size: 12px; color: var(--ink-3); }
+.hl-tested { color: var(--ultra-ink); font-weight: 600; }
+.hl-go { grid-row: 1 / span 2; grid-column: 2; align-self: center; display: inline-flex; align-items: center; gap: 2px; font-size: 14px; font-weight: 600; color: var(--ultra); }
+.hl-go .ic { width: 16px; height: 16px; transform: rotate(-90deg); }
+.muted.small { font-size: 12px; color: var(--ink-3); margin-top: 16px; }
+
+/* ---------- first-visit hero (Figma: Web/Mobile 01 · "First-visit hero") ----------
+   A bottom-up scrim over the map: clear at the top, panel-white at the bottom. The scrim lets map
+   gestures through (dragging the map dismisses it); only the content takes pointer events. It stops
+   above Google's footer row so the logo and terms stay visible. */
+.hero { position: absolute; z-index: 6; left: 0; right: 0; top: 42%; bottom: 26px; display: flex; align-items: flex-end; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(251,250,247,0) 0%, rgba(251,250,247,.6) 35%, rgba(251,250,247,.92) 60%, rgba(251,250,247,.98) 100%);
+  /* soft bottom edge into the strip kept clear for Google's footer */
+  -webkit-mask-image: linear-gradient(to top, transparent, #000 18px); mask-image: linear-gradient(to top, transparent, #000 18px); }
+.hero-in { pointer-events: auto; padding: 0 40px 24px; max-width: 980px; }
+.hero h1 { margin: 0 0 24px; max-width: 640px; font-size: 56px; font-weight: 600; line-height: 1.04; letter-spacing: -.03em; text-wrap: balance; }
+.hero h1 em { font-style: normal; color: var(--ultra); }
+.usps { list-style: none; margin: 0 0 24px; padding: 0; display: flex; flex-wrap: wrap; gap: 12px 28px; }
+.usps li { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 500; line-height: 22px; }
+.usp-ic { flex: none; width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; background: var(--ultra-soft); color: var(--ultra); }
+.usp-ic .ic { width: 18px; height: 18px; }
+.hero-act { display: flex; align-items: center; gap: 16px; }
+.hero-act .btn { padding: 0 22px; }
+.hero-act .btn .ic { width: 20px; height: 20px; }
+.hero-hint { font-size: 14px; color: var(--ink-2); }
+body.hero-on .here-btn { display: none; }
 
 /* ---------- mobile: map + search pill; place = bottom sheet that pulls up to a full-screen page ---------- */
 @media (max-width: 760px) {
@@ -226,7 +285,9 @@ body.can-test:not(.testing) .actionbar { display: block; }
   .controls { top: calc(max(8px, env(safe-area-inset-top)) + 58px); left: 16px; transform: none; }
   .mapbtns { top: auto; right: 12px; bottom: calc(30px + env(safe-area-inset-bottom)); }
   .zoom { display: none; }
-  .toast { left: 50%; bottom: calc(110px + env(safe-area-inset-bottom)); width: max-content; max-width: calc(100vw - 32px); }
+  .toast { left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); width: max-content; max-width: calc(100vw - 32px); }
+  .here-btn { left: 50%; bottom: calc(26px + env(safe-area-inset-bottom)); height: 50px; }
+  .chip-toggle { height: 38px; }
   /* the sheet's top edge moves (not a transform), so its bottom — and the pinned test action — stays on screen */
   .sidebar { position: fixed; left: 0; right: 0; bottom: 0; top: 100dvh; width: auto; max-height: none; display: flex; visibility: hidden; border-radius: 24px 24px 0 0; border-top: 0; box-shadow: 0 -4px 24px rgba(27,26,23,.12); transition: top .32s cubic-bezier(.2,.8,.2,1), visibility 0s .32s; }
   .sidebar.open { top: calc(100dvh - var(--sheet-half)); visibility: visible; transition: top .32s cubic-bezier(.2,.8,.2,1); }
@@ -254,6 +315,16 @@ body.can-test:not(.testing) .actionbar { display: block; }
   .testview { padding-top: 6px; }
   .gauges { gap: 8px; }
   .gauge { padding: 12px; }
+  /* hero: starts clear just under the Mobile/WiFi toggle; stacked USPs, full-width CTA; Locate hides (the CTA locates) */
+  .hero { top: calc(max(8px, env(safe-area-inset-top)) + 110px); bottom: calc(16px + env(safe-area-inset-bottom));
+    background: linear-gradient(to bottom, rgba(251,250,247,0) 0%, rgba(251,250,247,.55) 30%, rgba(251,250,247,.92) 52%, rgba(251,250,247,.98) 100%); }
+  .hero-in { width: 100%; padding: 0 20px 14px; }
+  .hero h1 { margin-bottom: 20px; font-size: 38px; line-height: 1.06; letter-spacing: -.025em; }
+  .usps { flex-direction: column; gap: 12px; margin-bottom: 20px; }
+  .hero-act { flex-direction: column; gap: 10px; }
+  .hero-act .btn { width: 100%; }
+  .hero-hint { font-size: 13px; }
+  body.hero-on .mapbtns { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } .toast .spin, .tstatus .spin, .skeleton div { animation: none; } }
 /* Test actions only exist within the test radius of the place (see app.js). */

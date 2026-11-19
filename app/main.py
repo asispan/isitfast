@@ -11,6 +11,8 @@ import collections
 import functools
 import hashlib
 import hmac
+import html as htmlmod
+import io
 import ipaddress
 import json
 import math
@@ -29,7 +31,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import metrics
+from . import analytics, metrics
 from .geo import haversine_m, neighbour_quadkeys, quadkey
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
@@ -46,6 +48,12 @@ CELL_TTL = 14 * 86400  # refresh OSM data every two weeks
 TILE = 0.25            # place snapshot tiles (~28 km); the map fetches the few that cover the view
 MAX_BBOX_DEG = 1.0     # /api/places bbox: at most 1 degree on each side
 MAX_TEST_DISTANCE_M = 50  # every place, homes and apartments included; must match TEST_RADIUS_M in web/app.js
+# Laptops locate by WiFi/IP and often report ±100-150 m. A test counts when the place is within 50 m of the
+# reported position plus its accuracy (capped here); tests with accuracy above PRECISE_ACC_M are labelled
+# approximate. Must match MAX_ACC_SLACK_M / PRECISE_ACC_M in web/app.js.
+MAX_ACC_SLACK_M = 150
+PRECISE_ACC_M = 50
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://isitfast.cloud").rstrip("/")
 SALT = os.environ.get("IP_SALT", "")
 WEAK_SALTS = {"", "isitfast", "change-me"}
 
@@ -171,10 +179,16 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS test_tokens_ip ON test_tokens(ip_hash, issued_at);
             """
         )
+        c.executescript(analytics.SCHEMA)
         tcols = {r["name"] for r in c.execute("PRAGMA table_info(tests)")}
         if "verified" not in tcols:  # 1 = result bounded by signed receipts from our speed Worker
             try:
                 c.execute("ALTER TABLE tests ADD COLUMN verified INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+        if "acc_m" not in tcols:  # the device's reported location accuracy at submit (no coordinates kept)
+            try:
+                c.execute("ALTER TABLE tests ADD COLUMN acc_m INTEGER")
             except sqlite3.OperationalError:
                 pass
         cols = {r["name"] for r in c.execute("PRAGMA table_info(places)")}
@@ -476,7 +490,7 @@ def place_detail(pid: str, req: Request, lat: float | None = Query(default=None,
     with db() as c:
         p = c.execute("SELECT * FROM places WHERE id=?", (pid,)).fetchone()
         tests = c.execute(
-            "SELECT network, carrier, asn, down_mbps, up_mbps, ping_ms, jitter_ms, created_at FROM tests "
+            "SELECT network, carrier, asn, down_mbps, up_mbps, ping_ms, jitter_ms, created_at, acc_m FROM tests "
             "WHERE place_id=? ORDER BY created_at DESC LIMIT 200",
             (pid,),
         ).fetchall() if p else []
@@ -560,7 +574,8 @@ def place_doc(p: dict, tests: list) -> dict:
         "ookla": base["ookla"],
         "recent_tests": [
             {"network": t["network"], "carrier": t["carrier"], "down_mbps": t["down_mbps"], "up_mbps": t["up_mbps"],
-             "ping_ms": t["ping_ms"], "at": _iso(t["created_at"])}
+             "ping_ms": t["ping_ms"], "at": _iso(t["created_at"]),
+             "approx": bool(t["acc_m"] and t["acc_m"] > PRECISE_ACC_M)}
             for t in tests[:15]
         ],
     }
@@ -687,9 +702,11 @@ RECEIPT_KEY = os.environ.get("RECEIPT_KEY", "")
 RECEIPT_SLACK = 2.0      # a trimmed-mean result can exceed the whole-window average (warm-up included)
 MIN_TEST_S = 3          # a capped test on a gigabit link finishes in ~3 s; receipts (phase 3) prove the bytes
 TOKEN_TTL_S = 15 * 60
-STARTS_PER_HOUR = 30
-TESTS_PER_HOUR = 10
-TESTS_PER_PLACE_PER_HOUR = 3
+# Per connection (salted IP hash). A busy coworking space puts dozens of people behind one NAT address, so
+# these are sized for a venue's worth of honest testers, not one person.
+STARTS_PER_HOUR = 60
+TESTS_PER_HOUR = 30
+TESTS_PER_PLACE_PER_HOUR = 20
 
 
 class SpotIn(BaseModel):
@@ -743,10 +760,12 @@ def read_token(token: str) -> tuple[str, int, str] | None:
 
 
 def check_distance(lat: float, lon: float, acc: float | None, p) -> float:
+    """In range = the place is within 50 m of the reported position, widened by its accuracy (capped)."""
     dist = haversine_m(lat, lon, p["lat"], p["lon"])
-    slack = min(acc or 0, 50)  # GPS jitter between the CTA check and the request
+    slack = min(acc or 0, MAX_ACC_SLACK_M)
     if dist > MAX_TEST_DISTANCE_M + slack:
-        raise HTTPException(422, f"You seem to be {dist:.0f} m away — tests must be run at the place.")
+        rough = f" (your location is only accurate to ±{acc:.0f} m)" if acc and acc > PRECISE_ACC_M else ""
+        raise HTTPException(422, f"You seem to be {dist:.0f} m away{rough} — tests must be run at the place.")
     return dist
 
 
@@ -835,6 +854,11 @@ def test_start(pid: str, s: StartIn, req: Request):
         if p:
             check_distance(s.lat, s.lon, s.accuracy_m, p)
         else:
+            if G_ID_RE.match(pid) and (s.accuracy_m or 0) > PRECISE_ACC_M:
+                # The first test pins a Google place where the tester stands, so it needs a precise fix.
+                metric("test_reject", "coarse_new_place")
+                raise HTTPException(422, f"Your location is only accurate to ±{s.accuracy_m:.0f} m — too rough to put "
+                                         "a new place on the map. Run this first test from your phone.")
             if s.spot:
                 check_distance(s.lat, s.lon, s.accuracy_m, {"lat": s.spot.lat, "lon": s.spot.lon, "kind": s.spot.kind})
             p = adopt(c, pid, s.spot, (s.lat, s.lon))
@@ -908,10 +932,10 @@ def add_test(pid: str, t: TestIn, req: Request):
         if network == "cellular" and asn in FIXED_ASNS:
             network = "wifi"  # user picked "mobile data" but the connection is fixed broadband
         c.execute(
-            "INSERT INTO tests (place_id, network, asn, carrier, colo, down_mbps, up_mbps, ping_ms, jitter_ms, dist_m, ip_hash, created_at, verified) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO tests (place_id, network, asn, carrier, colo, down_mbps, up_mbps, ping_ms, jitter_ms, dist_m, ip_hash, created_at, verified, acc_m) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, network, asn, carrier, t.colo, round(t.down_mbps, 2), round(t.up_mbps, 2), round(t.ping_ms, 1),
-             t.jitter_ms, round(dist), iph, now, verified),
+             t.jitter_ms, round(dist), iph, now, verified, round(t.accuracy_m) if t.accuracy_m is not None else None),
         )
         bump_tiles(c, [tile_of(p["lat"], p["lon"])])
         c.execute("COMMIT")
@@ -922,7 +946,9 @@ def add_test(pid: str, t: TestIn, req: Request):
     finally:
         c.close()
     metric("test_saved", f"{network}:{'verified' if verified else 'unverified'}")
-    return {"ok": True, "carrier": carrier, "network": network, "distance_m": round(dist), "verified": bool(verified)}
+    approx = bool(t.accuracy_m and t.accuracy_m > PRECISE_ACC_M)
+    return {"ok": True, "carrier": carrier, "network": network, "distance_m": round(dist), "verified": bool(verified),
+            "approx": approx}
 
 
 # ---------------------------------------------------------------- ASN names (shared across workers)
@@ -1097,6 +1123,84 @@ def metrics_view(req: Request, minutes: int = Query(60, ge=1, le=14 * 1440)):
     return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
+# ---------------------------------------------------------------- product analytics (see app/analytics.py)
+class EventIn(BaseModel):
+    n: str = Field(min_length=1, max_length=32)
+    r: str | None = Field(default=None, max_length=40)
+    p: dict[str, str | int | float | bool] | None = Field(default=None, max_length=12)
+
+
+@app.post("/api/e", status_code=204)
+def event(e: EventIn, req: Request):
+    """Cookieless funnel event (navigator.sendBeacon). Always 204, so it can't be used to probe anything."""
+    try:
+        with db() as c:
+            if analytics.record(c, client_ip(req), req.headers.get("user-agent", "")[:300], e.n, e.r, e.p):
+                metric("event", e.n)
+    except sqlite3.OperationalError:
+        metric("event", "dropped")
+    return Response(status_code=204)
+
+
+def require_metrics_token(req: Request) -> None:
+    if not METRICS_TOKEN or not hmac.compare_digest(req.headers.get("x-metrics-token", ""), METRICS_TOKEN):
+        raise HTTPException(404, "Not Found")
+
+
+@app.get("/api/stats")
+def stats_view(req: Request, days: int = Query(7, ge=1, le=120)):
+    """Launch funnel by day and by source (token-protected like /api/metrics; web/stats.html renders it)."""
+    require_metrics_token(req)
+    with db() as c:
+        return JSONResponse(analytics.summary(c, days), headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------- first view: the densest tested cluster
+HOME_BBOX = (12.70, 77.30, 13.25, 77.90)  # Bengaluru (launch city); falls back to anywhere, then the default
+HOTSPOT_CELL = 0.02                       # ~2.2 km grid
+_hotspot: tuple[float, dict] = (0.0, {})
+
+
+@app.get("/api/hotspot")
+def hotspot():
+    """Where a first-time visitor's map should open: the ~2 km cell with the most tested places, so the first
+    screen shows real results instead of an empty map. Cached for 5 minutes per worker."""
+    global _hotspot
+    if time.time() - _hotspot[0] < 300 and _hotspot[1]:
+        body = _hotspot[1]
+    else:
+        with db() as c:
+            rows = c.execute("SELECT p.lat, p.lon FROM places p WHERE p.id IN (SELECT DISTINCT place_id FROM tests)").fetchall()
+        s, w, n, e = HOME_BBOX
+        home = [r for r in rows if s <= r["lat"] <= n and w <= r["lon"] <= e] or rows
+        cells: dict[tuple[int, int], list] = {}
+        for r in home:
+            cells.setdefault((math.floor(r["lat"] / HOTSPOT_CELL), math.floor(r["lon"] / HOTSPOT_CELL)), []).append(r)
+        if cells:
+            best = max(cells.values(), key=len)
+            body = {"lat": round(sum(r["lat"] for r in best) / len(best), 5),
+                    "lon": round(sum(r["lon"] for r in best) / len(best), 5), "zoom": 15, "tested": len(best)}
+        else:
+            body = {"lat": None, "lon": None, "zoom": None, "tested": 0}
+        _hotspot = (time.time(), body)
+    return JSONResponse(body, headers={"Cache-Control": "public, max-age=300"})
+
+
+# ---------------------------------------------------------------- QR codes (desktop -> phone hand-off, table cards)
+@app.get("/qr.svg")
+def qr_svg(p: str | None = Query(default=None, max_length=310), r: str = Query(default="qr", max_length=32)):
+    """QR for a place link (/p/<id>?r=..) or, without p, for the "test where I am" flow on the phone."""
+    import segno  # noqa: PLC0415 — only this route needs it
+
+    ref = analytics.clean_ref(r) or "qr"
+    if p is not None and not PID_RE.match(p):
+        raise HTTPException(404, "unknown place")
+    url = f"{PUBLIC_URL}/p/{p}?r={ref}" if p else f"{PUBLIC_URL}/?go=here&r={ref}"
+    buf = io.BytesIO()
+    segno.make(url, error="m").save(buf, kind="svg", scale=4, border=2, dark="#1B1A17", light="#FFFFFF", xmldecl=False)
+    return Response(buf.getvalue(), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.exception_handler(sqlite3.OperationalError)
 def sqlite_error(_req: Request, exc: sqlite3.OperationalError):
     kind = "locked" if "locked" in str(exc) else "busy" if "busy" in str(exc) else "other"
@@ -1188,14 +1292,68 @@ def _index_html(_stamp: tuple) -> str:
     with open(os.path.join(WEB_DIR, "index.html"), encoding="utf-8") as f:
         html = f.read()
     safe = lambda v: re.sub(r"[^A-Za-z0-9_-]", "", v)  # noqa: E731 — keys/map ids are [A-Za-z0-9_-]
-    return html.replace("__GOOGLE_MAPS_KEY__", safe(GOOGLE_MAPS_KEY)).replace("__GOOGLE_MAP_ID__", safe(GOOGLE_MAP_ID))
+    return (html.replace("__GOOGLE_MAPS_KEY__", safe(GOOGLE_MAPS_KEY)).replace("__GOOGLE_MAP_ID__", safe(GOOGLE_MAP_ID))
+            .replace("__BASE__", PUBLIC_URL))
+
+
+SITE_TITLE = "isitfast — is the cafe's WiFi fast enough to work from?"
+SITE_DESC = ("Real WiFi and Jio/Airtel/Vi speeds at Bengaluru cafes and coworking spaces, tested by people who were "
+             "sitting there. Know if the WiFi can survive your standup, before you order. Free, no app, no login.")
+
+
+def render_index(title: str = SITE_TITLE, desc: str = SITE_DESC, path: str = "/") -> Response:
+    """index.html with its title, description and canonical/OG URL filled in (link previews read these)."""
+    html = _index_html(file_stamp(os.path.join(WEB_DIR, "index.html")))
+    esc = lambda v: htmlmod.escape(v, quote=True)  # noqa: E731
+    html = html.replace("__TITLE__", esc(title)).replace("__DESC__", esc(desc)).replace("__URL__", esc(PUBLIC_URL + path))
+    return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
+
+
+def _ago(ts: int) -> str:
+    d = max(0, int(time.time()) - ts)
+    return "today" if d < 86400 else "yesterday" if d < 2 * 86400 else f"{d // 86400} days ago"
+
+
+def place_preview_text(pid: str) -> tuple[str, str] | None:
+    """Title + description for a shared /p/<id> link, from our own data. Google places keep no name (only the
+    place_id may be stored), so their previews use a generic title."""
+    with db() as c:
+        p = c.execute("SELECT name FROM places WHERE id=?", (pid,)).fetchone()
+        if not p:
+            return None
+        tests = c.execute("SELECT network, carrier, down_mbps, up_mbps, created_at FROM tests WHERE place_id=? "
+                          "ORDER BY created_at DESC LIMIT 200", (pid,)).fetchall()
+    name = p["name"] or "This place"
+    title = f"{name} — WiFi & mobile data speeds · isitfast" if p["name"] else "WiFi & mobile data speeds here · isitfast"
+    wifi = next((t for t in tests if t["network"] == "wifi"), None)
+    latest_cell: dict[str, sqlite3.Row] = {}
+    for t in tests:
+        if t["network"] == "cellular":
+            latest_cell.setdefault(t["carrier"], t)
+    parts = []
+    if wifi:
+        parts.append(f"WiFi {wifi['down_mbps']:.0f}↓ / {wifi['up_mbps']:.0f}↑ Mbps, tested {_ago(wifi['created_at'])}")
+    if latest_cell:
+        best = max(latest_cell.values(), key=lambda t: t["down_mbps"])
+        parts.append(f"{best['carrier']} mobile data {best['down_mbps']:.0f}↓ Mbps")
+    desc = (". ".join(parts) + ". Tested on site by people who were there." if parts
+            else "No one has tested here yet. Be the first: a 20-second speed test, run at the place.")
+    return title, desc
 
 
 @app.get("/")
 @app.get("/index.html")
 def index():
-    html = _index_html(file_stamp(os.path.join(WEB_DIR, "index.html")))
-    return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
+    return render_index()
+
+
+@app.get("/p/{pid}")
+def place_page(pid: str):
+    """Shareable place URL. Same app as /, with link-preview tags for the place; the client opens it."""
+    if not PID_RE.match(pid):
+        raise HTTPException(404, "unknown place")
+    t = place_preview_text(pid)
+    return render_index(*t, path=f"/p/{pid}") if t else render_index(path=f"/p/{pid}")
 
 
 # Self-hosted basemap (vector tiles, style, fonts, sprites); see app/basemap.py

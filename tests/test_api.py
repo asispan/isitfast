@@ -202,16 +202,58 @@ def test_far_away_rejected_at_start(client):
     assert start(client, "n1", fresh_ip(), lat=PLACE[3] + 0.01).status_code == 422
 
 
-def test_rate_limits(client):
+def test_rate_limits(client, monkeypatch):
+    # Sized for a coworking space behind one NAT address: 20 per place and 30 overall per connection per hour.
+    assert (main.TESTS_PER_PLACE_PER_HOUR, main.TESTS_PER_HOUR) == (20, 30)
     hdr = fresh_ip()
-    codes = [run_test(client, "n3", hdr, PLACE3[3], PLACE3[4]).status_code for _ in range(4)]
-    assert codes == [200, 200, 200, 429]  # 3 per place per hour from one connection
+    codes = [run_test(client, "n3", hdr, PLACE3[3], PLACE3[4]).status_code for _ in range(21)]
+    assert codes == [200] * 20 + [429]  # per place per hour from one connection
+    monkeypatch.setattr(main, "TESTS_PER_HOUR", 10)  # the overall cap, without running 30 tests
     hdr = fresh_ip()
     codes = []
     for k in range(11):
         pid, lat, lon = [("n1",) + PLACE[3:], ("n2",) + PLACE2[3:], ("n3",) + PLACE3[3:]][k % 3]
         codes.append(run_test(client, pid, hdr, lat, lon).status_code)
-    assert codes.count(200) <= 9 and 429 in codes  # and 10 per hour overall
+    assert codes.count(200) == 10 and codes[-1] == 429
+
+
+def test_nat_coworking_twenty_people_one_ip(client):
+    """20 members of one coworking space share an address; each runs one test there."""
+    hdr = fresh_ip()
+    with main.db() as c:
+        c.execute(f"INSERT OR REPLACE INTO places ({main.PLACE_COLS}) VALUES (?,?,?,?,?,?,?,?,?)",
+                  ("n50", "Busy Cowork", "coworking", 12.95, 77.64, main.quadkey(12.95, 77.64), "{}", "x", 0))
+    codes = [run_test(client, "n50", hdr, 12.95, 77.64).status_code for _ in range(20)]
+    assert codes == [200] * 20
+
+
+def test_accuracy_aware_distance(client):
+    """A laptop at the place reports ±120 m and a position ~110 m off: accepted, labelled approximate.
+    Beyond 50 m + accuracy (capped at 150 m) it is refused with a readable reason."""
+    lat = PLACE2[3] + 0.001  # ~111 m north
+    hdr = fresh_ip()
+    s = client.post("/api/places/n2/test-start", json={"lat": lat, "lon": PLACE2[4], "accuracy_m": 120}, headers=hdr)
+    assert s.status_code == 200, s.text
+    body = {"token": s.json()["token"], "network": "wifi", "down_mbps": 33, "up_mbps": 9, "ping_ms": 20,
+            "lat": lat, "lon": PLACE2[4], "accuracy_m": 120}
+    r = client.post("/api/places/n2/tests", json=body, headers=hdr)
+    assert r.status_code == 200 and r.json()["approx"] is True
+    assert client.get("/api/places/n2?fresh=acc").json()["recent_tests"][0]["approx"] is True
+    # Precise fix, same spot: 111 m > 50 m + 10 m
+    far = client.post("/api/places/n2/test-start", json={"lat": lat, "lon": PLACE2[4], "accuracy_m": 10}, headers=fresh_ip())
+    assert far.status_code == 422 and "away" in far.json()["detail"]
+    # Accuracy is capped: ±2 km doesn't make 300 m count
+    far = client.post("/api/places/n2/test-start", json={"lat": PLACE2[3] + 0.0027, "lon": PLACE2[4], "accuracy_m": 2000},
+                      headers=fresh_ip())
+    assert far.status_code == 422 and "accurate to" in far.json()["detail"]
+
+
+def test_new_google_place_needs_precise_fix(client):
+    gid = "gChIJ_coarse_place_0123456789"
+    s = client.post(f"/api/places/{gid}/test-start", headers=fresh_ip(),
+                    json={"lat": PLACE[3], "lon": PLACE[4], "accuracy_m": 120, "spot": {"lat": PLACE[3], "lon": PLACE[4]}})
+    assert s.status_code == 422 and "phone" in s.json()["detail"]
+    assert count("SELECT COUNT(*) FROM places WHERE id=?", gid) == 0
 
 
 # ------------------------------------------------------------------ browse is read-only; adopt at test start
@@ -467,3 +509,81 @@ def test_origin_lock(client, monkeypatch):
     assert client.get("/healthz").status_code == 200                                      # health stays open
     monkeypatch.setattr(main, "ORIGIN_SECRET", "")
     assert client.get("/about.html").status_code == 200                                   # unset = no lock
+
+
+# ------------------------------------------------------------------ launch: analytics, deep links, first view, QR
+UA = {"user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/604.1"}
+
+
+def test_events_cookieless_and_filtered(client, monkeypatch):
+    from app import analytics
+    hdr = {**fresh_ip(), **UA}
+    r = client.post("/api/e", json={"n": "pageview", "r": "Reddit-BLR", "p": {"land": "place", "dev": "m", "lat": 12.9,
+                                                                            "rh": "www.reddit.com"}}, headers=hdr)
+    assert r.status_code == 204 and "set-cookie" not in r.headers
+    client.post("/api/e", json={"n": "panel_open", "r": "reddit-blr", "p": {"tested": True}}, headers=hdr)
+    client.post("/api/e", json={"n": "nope"}, headers=hdr)                                     # unknown event
+    client.post("/api/e", json={"n": "pageview"}, headers={**fresh_ip(), "user-agent": "WhatsApp/2.23"})  # preview bot
+    with main.db() as c:
+        rows = c.execute("SELECT name, ref, props, vh FROM events ORDER BY ts").fetchall()
+    assert [x["name"] for x in rows] == ["pageview", "panel_open"]
+    assert rows[0]["ref"] == "reddit-blr" and "lat" not in rows[0]["props"] and rows[0]["vh"] == rows[1]["vh"]
+    # The salt is per day and older salts are destroyed, so the same visitor tomorrow is a new hash.
+    with main.db() as c:
+        assert c.execute("SELECT COUNT(*) FROM analytics_salt").fetchone()[0] == 1
+        tomorrow = analytics.record(c, "203.0.113.5", UA["user-agent"], "pageview", None, None, now=time.time() + 86400)
+        assert tomorrow and c.execute("SELECT COUNT(*) FROM analytics_salt").fetchone()[0] == 1
+        c.execute("DELETE FROM events WHERE day > ?", (analytics.today(),))
+    monkeypatch.setattr(analytics, "_salt", (None, None))
+
+
+def test_stats_funnel_by_source(client, monkeypatch):
+    monkeypatch.setattr(main, "METRICS_TOKEN", "")
+    assert client.get("/api/stats").status_code == 404
+    monkeypatch.setattr(main, "METRICS_TOKEN", "tok")
+    a, b = {**fresh_ip(), **UA}, {**fresh_ip(), **UA}
+    for n in ("pageview", "panel_open", "test_complete", "share_click"):
+        client.post("/api/e", json={"n": n, "r": "wa", "p": {"ch": "whatsapp"}}, headers=a)
+    client.post("/api/e", json={"n": "pageview"}, headers=b)
+    client.post("/api/e", json={"n": "gate_fail", "p": {"reason": "coarse", "dev": "d", "acc": "150plus"}}, headers=b)
+    s = client.get("/api/stats", headers={"x-metrics-token": "tok"}).json()
+    assert s["refs"]["wa"] == {"visitors": 1, "engaged": 1, "testers": 1, "sharers": 1}
+    assert s["refs"]["direct"]["visitors"] >= 1
+    assert s["gate_fail"]["reason"]["coarse"] == 1 and s["gate_fail"]["dev"]["d"] == 1
+    assert s["shares"]["whatsapp"] == 1 and s["days"][-1]["visitors"] >= 2
+
+
+def test_place_deep_link_has_preview_tags(client):
+    r = client.get("/p/n1")
+    assert r.status_code == 200 and "no-cache" in r.headers["cache-control"]
+    html = r.text
+    assert "<title>Test Cafe — WiFi &amp; mobile data speeds · isitfast</title>" in html
+    assert 'property="og:url" content="https://isitfast.cloud/p/n1"' in html
+    assert 'content="WiFi ' in html and "og.jpg" in html and "__TITLE__" not in html
+    home = client.get("/").text
+    assert 'property="og:image" content="https://isitfast.cloud/og.jpg?v=1"' in home and "summary_large_image" in home
+    assert client.get("/p/x'><script>").status_code == 404
+    g = client.get("/p/gChIJ_untested_place_0123456789")  # unknown Google place: generic tags, the app opens it
+    assert g.status_code == 200 and "is the cafe" in g.text
+
+
+def test_place_preview_escapes_visitor_names(client):
+    spot = {"name": "<b>Evil</b> \"Cafe\"", "kind": "cafe", "lat": 12.80, "lon": 77.50}
+    s = start(client, "new", fresh_ip(), lat=spot["lat"], lon=spot["lon"], spot=spot)
+    html = client.get(f"/p/{s.json()['id']}").text
+    assert "<b>Evil" not in html and "&lt;b&gt;Evil&lt;/b&gt; &quot;Cafe&quot;" in html
+    assert "No one has tested here yet" in html
+
+
+def test_hotspot_is_densest_tested_cluster(client, monkeypatch):
+    monkeypatch.setattr(main, "_hotspot", (0.0, {}))
+    h = client.get("/api/hotspot").json()
+    assert h["tested"] >= 2 and abs(h["lat"] - 12.93) < 0.03 and abs(h["lon"] - 77.62) < 0.03
+    assert "max-age=300" in client.get("/api/hotspot").headers["cache-control"]
+
+
+def test_qr_codes(client):
+    r = client.get("/qr.svg", params={"p": "n1", "r": "handoff"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml") and b"<svg" in r.content
+    assert client.get("/qr.svg").status_code == 200                     # the "test where I am" link
+    assert client.get("/qr.svg", params={"p": "../etc"}).status_code == 404

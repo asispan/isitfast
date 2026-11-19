@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Launch stats — isitfast.cloud</title>
+  <style>
+    body { font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #1B1A17; background: #FBFAF7; max-width: 980px; margin: 24px auto; padding: 0 20px; }
+    h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 15px; margin: 28px 0 8px; }
+    .muted { color: #5F5A50; } form { display: flex; gap: 8px; margin: 12px 0; }
+    input, select, button { font: inherit; padding: 6px 10px; border: 1px solid #D6D1C5; border-radius: 8px; background: #fff; }
+    table { border-collapse: collapse; width: 100%; } th, td { padding: 6px 8px; border-bottom: 1px solid #E3DFD5; text-align: right; }
+    th:first-child, td:first-child { text-align: left; } th { font-weight: 600; font-size: 12px; color: #5F5A50; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+    .kpi { background: #F4F2EC; border-radius: 12px; padding: 12px; } .kpi b { display: block; font-size: 24px; } .err { color: #B42318; }
+  </style>
+</head>
+<body>
+  <h1>Launch stats</h1>
+  <p class="muted">Cookieless funnel from /api/stats. Visitors are unique per day (the hash salt rotates daily), so multi-day totals are visitor-days. The token stays in this tab only.</p>
+  <form id="f"><input id="tok" type="password" placeholder="METRICS_TOKEN" autocomplete="off" size="28" />
+    <select id="days"><option>1</option><option>3</option><option selected>7</option><option>14</option><option>30</option></select>
+    <button>Load</button></form>
+  <div id="out"></div>
+  <script>
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : "–");
+    const table = (head, rows) => `<table><tr>${head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</table>`;
+    const kv = (o) => table(["", "count"], Object.entries(o || {}).sort((a, b) => b[1] - a[1]));
+    const tok = document.getElementById("tok");
+    tok.value = location.hash.slice(1); // optional: /stats.html#<token>
+    document.getElementById("f").onsubmit = async (e) => {
+      e.preventDefault();
+      const out = document.getElementById("out");
+      const r = await fetch(`/api/stats?days=${document.getElementById("days").value}`, { headers: { "x-metrics-token": tok.value } });
+      if (!r.ok) { out.innerHTML = `<p class="err">HTTP ${r.status} — wrong or missing token?</p>`; return; }
+      const s = await r.json(), t = s.total;
+      out.innerHTML = `
+        <div class="kpis">
+          <div class="kpi">Visitor-days<b>${t.visitors}</b></div>
+          <div class="kpi">Opened a place<b>${t.engaged}</b>${pct(t.engaged, t.visitors)}</div>
+          <div class="kpi">Ran a test<b>${t.testers}</b>${pct(t.testers, t.engaged)} of engaged</div>
+          <div class="kpi">Shared<b>${t.sharers}</b>${pct(t.sharers, t.testers)} of testers</div>
+          <div class="kpi">Tests saved<b>${t.tests_saved}</b></div>
+          <div class="kpi">Places tested, 14 d<b>${s.places_tested_14d}</b></div>
+        </div>
+        <h2>By day (${esc(s.range[0])} → ${esc(s.range[1])}, IST)</h2>
+        ${table(["day", "visitors", "engaged", "testers", "sharers", "tests saved", "places tested", "gate fails"],
+          s.days.slice().reverse().map((d) => [d.day, d.visitors, d.engaged, d.testers, d.sharers, d.tests_saved, d.places_tested, d.events.gate_fail || 0]))}
+        <h2>By source (?r= code of the first visit that day)</h2>
+        ${table(["source", "visitors", "engaged", "testers", "sharers", "engaged %"],
+          Object.entries(s.refs).map(([k, v]) => [k, v.visitors, v.engaged, v.testers, v.sharers, pct(v.engaged, v.visitors)]))}
+        <h2>Location gate failures</h2>
+        <p class="muted">reason</p>${kv(s.gate_fail.reason)}
+        <p class="muted">device (m = phone, d = desktop)</p>${kv(s.gate_fail.dev)}
+        <p class="muted">reported accuracy</p>${kv(s.gate_fail.acc)}
+        <p class="muted">distance from the place</p>${kv(s.gate_fail.dist)}
+        <h2>Shares by channel</h2>${kv(s.shares)}
+        <h2>Landing</h2>${kv(s.landing)}
+        <h2>Referrer hosts</h2>${kv(s.referrer_hosts)}`;
+    };
+    if (tok.value) document.getElementById("f").requestSubmit();
+  </script>
+</body>
+</html>

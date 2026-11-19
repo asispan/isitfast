@@ -46,8 +46,12 @@ Cloudflare (proxied; transform rule → x-visitor-asn; cache rule: GET /api/plac
 most of them. A new test bumps only its tile's revision. Place cards (`/api/places/{id}`) are cached 30 s;
 after your own test the client bypasses with `?fresh=`. No request ever calls Overpass.
 
-**Write path (verified).** `POST /api/places/{id}/test-start` checks you are within 50 m, rate-limits
-(30 starts / 10 tests per connection per hour, 3 per place), creates the place if it was only being
+**Write path (verified).** `POST /api/places/{id}/test-start` checks you are in range — within 50 m of the
+place, widened by the device's reported accuracy up to 150 m, because laptops locate by WiFi and often report
+±100–150 m; tests reported at worse than ±50 m are stored with that accuracy and shown as approximate, and the
+first test at a Google place (which pins it where you stand) needs ±50 m or better. It rate-limits per
+connection (60 starts / 30 tests per hour, 20 per place — sized for a coworking space behind one NAT
+address), creates the place if it was only being
 previewed, and returns a single-use HMAC token + session id. The browser tests against our Worker, which
 signs a cumulative receipt every 4 MiB of download and one per upload. `POST …/tests` needs the token
 (3 s–15 min old, used once) and, when receipts are present, the claimed speeds must be within 2× of what
@@ -74,6 +78,25 @@ OSM/visitor place opens that place instead, so tests aren't split.
 **Instrumentation.** `GET /api/metrics` (header `x-metrics-token`; returns 404 when `METRICS_TOKEN` is unset)
 returns per-route latency and counts, event-loop lag, threadpool saturation, SQLite lock errors, the test
 funnel, outbound calls per upstream, client telemetry, row counts, file sizes and the last backup.
+
+**Product analytics (first-party, cookieless).** The page sends funnel events (`pageview`, `panel_open`,
+`test_cta_shown`, `gate_fail`, `test_start`, `test_complete`, `share_click`, …) to `POST /api/e` with
+`sendBeacon`. No cookies, no storage, no third-party script. A visitor is counted per day by
+`sha256(daily salt + IP + user agent)`; the salt is random, lives only in `app.db` and is deleted when the IST
+day ends, so visits can't be linked across days, even by us. Events keep a whitelisted set of short properties
+(reason, accuracy/distance *buckets*, network, share channel) and the `?r=` attribution code of the link the
+visitor came in on — never coordinates or place ids. Kept 400 days. `GET /api/stats?days=7` (same token)
+returns visitors, engaged (opened a place), testers and sharers per day and per `?r=` source, plus location
+gate failures by reason/device/accuracy; `/stats.html` renders it.
+
+**Shareable links.** Every place has a URL, `/p/<id>`, served with link-preview tags (title, the latest WiFi
+and best mobile result, `og.jpg`). Append `?r=<code>` to attribute traffic (`wa`, `x`, `copy` are added by the
+share buttons; use your own for posts, e.g. `?r=reddit-blr`). `GET /qr.svg?p=<id>&r=<code>` draws a QR for a
+place link (laptop → phone hand-off, table cards); without `p` it opens "Test where I am" on the phone.
+
+**First view.** A first-time visitor isn't asked for location on load: the map opens on the ~2 km cell with the
+most tested places (`GET /api/hotspot`, Bengaluru first). Visitors who already allowed location see the map
+around them.
 
 ## Run it yourself
 
@@ -113,6 +136,10 @@ connection at 128). In production most reads are Cloudflare cache hits and never
 * A tested Google place's pin sits where its first test was run, which can be up to ~50 m from Google's own icon.
 * Location is client-reported: the 50 m rule stops honest mistakes, not a determined spoofer. Receipts bound
   the claimed *speed*, not *where* the test ran. Tests that fell back to speed.cloudflare.com are unverified.
+  Widening the range by reported accuracy (up to 150 m) lets laptops test, at the cost of accepting some
+  tests from up to ~200 m away; those are labelled approximate.
+* "Test where I am" lists our places plus Google's nearby POIs; indoors, GPS often can't tell neighbouring
+  shops apart, so the visitor picks the place.
 * Single server + SQLite: fine far beyond today's traffic (reads are edge-cached), but writes are serialised;
   `/api/metrics` (db_error:locked, loop lag) shows when that starts to matter.
 
