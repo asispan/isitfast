@@ -332,6 +332,7 @@
     state.features.clear();
     for (const t of tiles.values()) for (const f of t.features) state.features.set(f.properties.id, f);
     syncPins();
+    updateHereName();
   }
   let hinted = false;
   async function loadPlaces(freshKey) {
@@ -379,6 +380,23 @@
       meMarker = new AdvancedMarkerElement({ map, position: ll(state.me.lat, state.me.lon), content: el, zIndex: 5 });
     } else meMarker.position = ll(state.me.lat, state.me.lon);
     updateCta();
+    updateHereName();
+  }
+  // Map-view CTA (web): second line names the nearest place you could test, once we know where you are.
+  function updateHereName() {
+    const el = $("#here-name");
+    if (!el) return;
+    let best = null, bd = Infinity;
+    if (state.me) {
+      const reach = reachM(state.me.acc);
+      for (const f of state.features.values()) {
+        const p = f.properties;
+        if (!p.name) continue;
+        const [lon, lat] = f.geometry.coordinates, d = distM(state.me, { lat, lon });
+        if (d <= reach && d < bd) { bd = d; best = p.name; }
+      }
+    }
+    el.textContent = best || "Where you are";
   }
   // Keep the position fresh so the speed-test CTA appears/disappears as the user walks in or out of range.
   // No timeout: a stationary device may not report for a while, and a TIMEOUT must not kill the watch.
@@ -451,6 +469,7 @@
     if (preds.length && !results.hidden) pick(preds[0]); else suggest();
   });
   async function pick(pred) {
+    hideHero(); // picking a search result is one of the three things that dismiss the hero
     results.hidden = true;
     q.value = pred.mainText?.text || pred.text.text;
     q.blur();
@@ -1102,10 +1121,11 @@
   function hideToast() { $("#toast").hidden = true; }
 
   // ------------------------------------------------------------------ first-visit hero
-  // Shown once, on a plain map landing. The first real interaction (dragging or tapping the map, searching,
-  // switching Mobile/WiFi, opening a place, Escape) dismisses it and a localStorage flag keeps it gone.
+  // Shown once, on a plain map landing. Web: it stays until the visitor picks a search result, opens a place
+  // (a dot on the map) or clicks its CTA. Mobile: any real interaction (dragging or tapping the map, the search
+  // box, Mobile/WiFi, Escape) also dismisses it. A localStorage flag then keeps it gone.
   // The flag is a yes/no for this browser only; it is never sent anywhere.
-  const HERO_KEY = "isitfast.hero.seen", heroEl = $("#hero");
+  const HERO_KEY = "isitfast.hero.seen.v2", heroEl = $("#hero");
   let heroOn = false;
   function heroSeen() { try { return localStorage.getItem(HERO_KEY) === "1"; } catch { return false; } }
   function showHero() { heroOn = true; heroEl.hidden = false; document.body.classList.add("hero-on"); }
@@ -1136,11 +1156,12 @@
     } catch {}
     flyTo(12.9716, 77.5946, 13); // Bengaluru
   });
-  map.addListener("dragstart", hideHero);
-  map.addListener("click", hideHero);
-  q.addEventListener("focus", hideHero);
-  document.querySelectorAll(".seg button, #tested-only").forEach((b) => b.addEventListener("click", hideHero));
-  addEventListener("keydown", (e) => { if (e.key === "Escape") hideHero(); });
+  const hideHeroMobile = () => { if (isMobile()) hideHero(); };
+  map.addListener("dragstart", hideHeroMobile);
+  map.addListener("click", hideHeroMobile);
+  q.addEventListener("focus", hideHeroMobile);
+  document.querySelectorAll(".seg button, #tested-only").forEach((b) => b.addEventListener("click", hideHeroMobile));
+  addEventListener("keydown", (e) => { if (e.key === "Escape") hideHeroMobile(); });
   $("#hero-go").addEventListener("click", () => {
     hideHero();
     const wifi = document.querySelector('.seg button[data-mode="wifi"]');

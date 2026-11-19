@@ -25,7 +25,7 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=7" />
   <link rel="preconnect" href="https://maps.googleapis.com" />
   <link rel="preload" href="/fonts/geist-latin.woff2?v=1" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="/style.css?v=35" />
+  <link rel="stylesheet" href="/style.css?v=36" />
 </head>
 <body>
   <div id="map" aria-label="Map of places and their internet speeds" data-map-id="__GOOGLE_MAP_ID__"></div>
@@ -51,9 +51,14 @@
     <button class="chip-toggle" id="tested-only" type="button" aria-pressed="false" title="Hide places nobody has tested yet"><svg class="ic" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Tested only</button>
   </div>
 
-  <button class="here-btn" id="here" type="button"><img src="/icons/speed-white.png?v=1" alt="" width="20" height="20" />Test where I am</button>
+  <button class="here-btn" id="here" type="button" aria-label="Test internet speed where you are">
+    <img class="here-ic" src="/icons/speed-white.png?v=1" alt="" width="24" height="24" />
+    <span class="here-l"><b>Test internet speed</b><small id="here-name">Where you are</small></span>
+    <span class="here-m">Test where I am</span>
+    <span class="here-r">Start<svg class="ic" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
+  </button>
 
-  <!-- First visit only (app.js): pitch over the map; any map gesture, search or place dismisses it for good. -->
+  <!-- First visit only (app.js). Web: stays until a search result is picked, a place is opened or its CTA is clicked. Mobile: any map gesture or search dismisses it. -->
   <section class="hero" id="hero" aria-labelledby="hero-h" hidden>
     <div class="hero-in">
       <p class="hero-notice" id="hero-notice" hidden><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5L2.5 20h19L12 3.5z"/><path d="M12 10v4.5M12 17.5v.01"/></svg>We’re not live in your country yet</p>
@@ -144,6 +149,6 @@
     });
   </script>
   <script src="/speedtest.js?v=16"></script>
-  <script src="/app.js?v=48"></script>
+  <script src="/app.js?v=49"></script>
 </body>
 </html>

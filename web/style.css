@@ -236,10 +236,17 @@ body.can-test .offrange, body:not(.can-test) .cta { display: none; }
 .chip-toggle .ic { width: 16px; height: 16px; opacity: .35; }
 .chip-toggle[aria-pressed="true"] { background: var(--ultra); border-color: var(--ultra); color: var(--white); }
 .chip-toggle[aria-pressed="true"] .ic { opacity: 1; }
-.here-btn { position: absolute; z-index: 4; left: calc(var(--panel-w) + 2 * var(--gap) + (100% - var(--panel-w) - 2 * var(--gap)) / 2); bottom: 36px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 22px 0 18px; border: 0; border-radius: 26px; background: var(--ultra); color: var(--white); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgba(31,45,168,.32); white-space: nowrap; }
+/* Map-view test CTA: same card as the panel's .cta, centred on the page (web); a pill on mobile */
+.here-btn { position: absolute; z-index: 4; left: 50%; bottom: 36px; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; width: min(400px, calc(100% - 32px)); padding: 12px 16px; border: 0; border-radius: 16px; background: var(--ultra); color: var(--white); font: inherit; text-align: left; cursor: pointer; box-shadow: 0 8px 24px rgba(31,45,168,.32); }
+.here-ic { flex: none; width: 40px; height: 40px; padding: 8px; border-radius: 10px; background: rgba(255,255,255,.16); }
+.here-l { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.here-l b { font-size: 15px; font-weight: 600; }
+.here-l small { font-size: 12px; opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.here-r { display: inline-flex; align-items: center; gap: 2px; font-size: 15px; font-weight: 600; }
+.here-m { display: none; }
 .here-btn:hover { background: var(--ultra-ink); }
 body:has(.sidebar.open) .here-btn { display: none; }
-.toast { bottom: 104px; }
+.toast { bottom: 112px; }
 .here-list { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
 .here-list button { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
 .here-list button:hover { border-color: var(--ultra); background: var(--ultra-soft); }
@@ -293,7 +300,10 @@ body.hero-on .here-btn { display: none; }
   .mapbtns { top: auto; right: 12px; bottom: calc(30px + env(safe-area-inset-bottom)); }
   .zoom { display: none; }
   .toast { left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); width: max-content; max-width: calc(100vw - 32px); }
-  .here-btn { left: 50%; bottom: calc(26px + env(safe-area-inset-bottom)); height: 50px; }
+  .here-btn { left: 50%; bottom: calc(26px + env(safe-area-inset-bottom)); display: inline-flex; gap: 10px; width: auto; height: 50px; padding: 0 22px 0 18px; border-radius: 26px; font-size: 15px; font-weight: 600; white-space: nowrap; }
+  .here-ic { width: 20px; height: 20px; padding: 0; border-radius: 0; background: none; }
+  .here-l, .here-r { display: none; }
+  .here-m { display: inline; }
   .chip-toggle { height: 38px; }
   /* the sheet's top edge moves (not a transform), so its bottom — and the pinned test action — stays on screen */
   .sidebar { position: fixed; left: 0; right: 0; bottom: 0; top: 100dvh; width: auto; max-height: none; display: flex; visibility: hidden; border-radius: 24px 24px 0 0; border-top: 0; box-shadow: 0 -4px 24px rgba(27,26,23,.12); transition: top .32s cubic-bezier(.2,.8,.2,1), visibility 0s .32s; }
