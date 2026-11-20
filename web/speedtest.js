@@ -20,6 +20,16 @@
 (function () {
   const OWN = "https://speed.isitfast.cloud", INDIA = "https://speed-in.isitfast.cloud";
   const FALLBACK = "https://speed.cloudflare.com";
+  // QA override, read once at load: the app rewrites the address to /p/<id> (dropping the query) before
+  // a test starts, so it is kept for the tab in sessionStorage. ?speed=auto clears it.
+  const FORCE = (() => {
+    try {
+      const q = new URLSearchParams(location.search).get("speed");
+      if (q === "india" || q === "own") sessionStorage.setItem("isitfast.speed", q);
+      else if (q === "auto") sessionStorage.removeItem("isitfast.speed");
+      return sessionStorage.getItem("isitfast.speed");
+    } catch { return null; }
+  })();
   // Receipt every 1 MiB: on mobile data a stream may only run ~5 s, so coarse receipts undercount it.
   const BLOCK = 1024 * 1024, RECEIPT = 128;
   let BASE = OWN, SID = null, moved = 0, ownFailed = false;
@@ -230,7 +240,7 @@
   }
 
   async function pickEndpoint(sid) {
-    const force = new URLSearchParams(location.search).get("speed"); // QA: ?speed=india|own
+    const force = FORCE; // QA: ?speed=india|own
     if (force === "india" || force === "own") { BASE = force === "india" ? INDIA : OWN; SID = sid || null; return; }
     const [own, india] = await Promise.all([rtt(OWN), rtt(INDIA)]);
     ownFailed = own === Infinity;
