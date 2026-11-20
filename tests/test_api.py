@@ -567,6 +567,19 @@ def test_place_deep_link_has_preview_tags(client):
     assert g.status_code == 200 and "is the cafe" in g.text
 
 
+def test_each_domain_is_its_own_site(client):
+    """isitfast.space and isitfast.cloud are equal sites: preview/canonical URLs follow the Host; unknown hosts
+    fall back to PUBLIC_URL."""
+    sp = client.get("/p/n1", headers={"host": "isitfast.space"}).text
+    assert 'rel="canonical" href="https://isitfast.space/p/n1"' in sp and 'og:url" content="https://isitfast.space/p/n1"' in sp
+    assert 'og:image" content="https://isitfast.space/og.jpg?v=1"' in sp and 'og:site_name" content="isitfast.space"' in sp
+    assert "isitfast.cloud" not in sp.split("</head>")[0]
+    assert 'og:url" content="https://www.isitfast.cloud/"' in client.get("/", headers={"host": "www.isitfast.cloud"}).text
+    evil = client.get("/", headers={"host": "evil.example"}).text
+    assert 'og:url" content="https://isitfast.cloud/"' in evil and "evil.example" not in evil
+    assert client.get("/qr.svg", headers={"host": "isitfast.space"}).status_code == 200
+
+
 def test_place_preview_escapes_visitor_names(client):
     spot = {"name": "<b>Evil</b> \"Cafe\"", "kind": "cafe", "lat": 12.80, "lon": 77.50}
     s = start(client, "new", fresh_ip(), lat=spot["lat"], lon=spot["lon"], spot=spot)

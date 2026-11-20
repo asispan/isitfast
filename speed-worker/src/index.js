@@ -19,7 +19,7 @@
 const BLOCK = 4 * 1024 * 1024;
 const RECEIPT = 128;
 const MAX_DOWN = 500e6;
-const ALLOWED = ["https://isitfast.cloud", "https://www.isitfast.cloud", "http://127.0.0.1:8766", "http://localhost:8766"];
+const ALLOWED = ["https://isitfast.cloud", "https://www.isitfast.cloud", "https://isitfast.space", "https://www.isitfast.space", "http://127.0.0.1:8766", "http://localhost:8766"];
 
 let filler = null; // one random block per isolate: incompressible, reused (never copied)
 let keyPromise = null;

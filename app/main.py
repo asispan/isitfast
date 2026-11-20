@@ -54,6 +54,15 @@ MAX_TEST_DISTANCE_M = 50  # every place, homes and apartments included; must mat
 MAX_ACC_SLACK_M = 150
 PRECISE_ACC_M = 50
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://isitfast.cloud").rstrip("/")
+# Every domain the site answers on is its own equal site (no cross-domain canonical): links, QR codes and
+# link-preview URLs use the domain the visitor came in on. Anything else falls back to PUBLIC_URL.
+SITE_HOSTS = {h.strip().lower() for h in os.environ.get(
+    "SITE_HOSTS", "isitfast.cloud,www.isitfast.cloud,isitfast.space,www.isitfast.space").split(",") if h.strip()}
+
+
+def site_base(request: Request | None) -> str:
+    host = (request.headers.get("host", "") if request else "").split(":")[0].strip().lower()
+    return f"https://{host}" if host in SITE_HOSTS else PUBLIC_URL
 SALT = os.environ.get("IP_SALT", "")
 WEAK_SALTS = {"", "isitfast", "change-me"}
 
@@ -1188,14 +1197,15 @@ def hotspot():
 
 # ---------------------------------------------------------------- QR codes (desktop -> phone hand-off, table cards)
 @app.get("/qr.svg")
-def qr_svg(p: str | None = Query(default=None, max_length=310), r: str = Query(default="qr", max_length=32)):
+def qr_svg(request: Request, p: str | None = Query(default=None, max_length=310), r: str = Query(default="qr", max_length=32)):
     """QR for a place link (/p/<id>?r=..) or, without p, for the "test where I am" flow on the phone."""
     import segno  # noqa: PLC0415 — only this route needs it
 
     ref = analytics.clean_ref(r) or "qr"
     if p is not None and not PID_RE.match(p):
         raise HTTPException(404, "unknown place")
-    url = f"{PUBLIC_URL}/p/{p}?r={ref}" if p else f"{PUBLIC_URL}/?go=here&r={ref}"
+    base = site_base(request)
+    url = f"{base}/p/{p}?r={ref}" if p else f"{base}/?go=here&r={ref}"
     buf = io.BytesIO()
     segno.make(url, error="m").save(buf, kind="svg", scale=4, border=2, dark="#1B1A17", light="#FFFFFF", xmldecl=False)
     return Response(buf.getvalue(), media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
@@ -1297,7 +1307,7 @@ def _index_html(_stamp: tuple) -> str:
         html = f.read()
     safe = lambda v: re.sub(r"[^A-Za-z0-9_-]", "", v)  # noqa: E731 — keys/map ids are [A-Za-z0-9_-]
     return (html.replace("__GOOGLE_MAPS_KEY__", safe(GOOGLE_MAPS_KEY)).replace("__GOOGLE_MAP_ID__", safe(GOOGLE_MAP_ID))
-            .replace("__BASE__", PUBLIC_URL))
+            )
 
 
 SITE_TITLE = "isitfast — is the cafe's WiFi fast enough to work from?"
@@ -1305,11 +1315,13 @@ SITE_DESC = ("Real WiFi and Jio/Airtel/Vi speeds at Bengaluru cafes and coworkin
              "sitting there. Know if the WiFi can survive your standup, before you order. Free, no app, no login.")
 
 
-def render_index(title: str = SITE_TITLE, desc: str = SITE_DESC, path: str = "/") -> Response:
+def render_index(request: Request | None, title: str = SITE_TITLE, desc: str = SITE_DESC, path: str = "/") -> Response:
     """index.html with its title, description and canonical/OG URL filled in (link previews read these)."""
     html = _index_html(file_stamp(os.path.join(WEB_DIR, "index.html")))
     esc = lambda v: htmlmod.escape(v, quote=True)  # noqa: E731
-    html = html.replace("__TITLE__", esc(title)).replace("__DESC__", esc(desc)).replace("__URL__", esc(PUBLIC_URL + path))
+    base = site_base(request)
+    html = (html.replace("__TITLE__", esc(title)).replace("__DESC__", esc(desc)).replace("__URL__", esc(base + path))
+            .replace("__BASE__", esc(base)).replace("__HOST__", esc(base.removeprefix("https://"))))
     return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
@@ -1347,17 +1359,17 @@ def place_preview_text(pid: str) -> tuple[str, str] | None:
 
 @app.get("/")
 @app.get("/index.html")
-def index():
-    return render_index()
+def index(request: Request):
+    return render_index(request)
 
 
 @app.get("/p/{pid}")
-def place_page(pid: str):
+def place_page(pid: str, request: Request):
     """Shareable place URL. Same app as /, with link-preview tags for the place; the client opens it."""
     if not PID_RE.match(pid):
         raise HTTPException(404, "unknown place")
     t = place_preview_text(pid)
-    return render_index(*t, path=f"/p/{pid}") if t else render_index(path=f"/p/{pid}")
+    return render_index(request, *t, path=f"/p/{pid}") if t else render_index(request, path=f"/p/{pid}")
 
 
 # Self-hosted basemap (vector tiles, style, fonts, sprites); see app/basemap.py

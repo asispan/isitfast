@@ -904,7 +904,7 @@
   function geoError(err) {
     if (err && err.code === 1) return new GateError("denied", isTouch
       ? "Location is blocked for this site. Allow it in your browser's site settings (the icon next to the address), then try again."
-      : "Location is blocked for isitfast.cloud. Allow it from the icon next to the address bar (on a Mac, also System Settings → Privacy & Security → Location Services → your browser), or test from your phone:");
+      : `Location is blocked for ${location.hostname}. Allow it from the icon next to the address bar (on a Mac, also System Settings → Privacy & Security → Location Services → your browser), or test from your phone:`);
     if (err && err.code === 3) return new GateError("timeout", isTouch
       ? "Finding your location took too long. Step near a window or turn on precise location, then try again."
       : "Finding your location took too long. Laptops locate themselves using WiFi — make sure WiFi is on, or test from your phone:");
