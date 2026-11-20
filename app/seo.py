@@ -205,9 +205,14 @@ def _iso_day(v: str | None) -> str:
         return ""
 
 
+def size_txt(km: float) -> str:
+    """0.15 -> "150 m", 2.8 -> "2.8 km"."""
+    return f"{round(km * 1000, -1):.0f} m" if km < 1 else f"{km:g} km"
+
+
 def trai_size(rows: list[dict]) -> str:
     sizes = sorted({r["across_km"] for r in rows})
-    return f"~{sizes[0]} km" if len(sizes) == 1 else f"~{sizes[0]}–{sizes[-1]} km"
+    return f"~{size_txt(sizes[0])}" if len(sizes) == 1 else f"~{size_txt(sizes[0])}–{size_txt(sizes[-1])}"
 
 
 def trai_period(rows: list[dict]) -> str:
@@ -242,7 +247,7 @@ def trai_table_html(local: dict | None, caption: str) -> str:
     body = "".join(
         f"<tr><th scope=\"row\">{esc(r['carrier'])}</th><td>{mbps(r['down'])}</td>"
         f"<td>{mbps(r['up']) if r['up'] is not None else '—'}</td><td>{r['tests']:,}</td>"
-        f"<td>~{r['across_km']} km</td></tr>" for r in rows)
+        f"<td>~{size_txt(r['across_km'])}</td></tr>" for r in rows)
     return (f"<table><caption>{esc(caption)}</caption><thead><tr><th scope=\"col\">Carrier</th>"
             "<th scope=\"col\">Median download (Mbps)</th><th scope=\"col\">Median upload (Mbps)</th>"
             "<th scope=\"col\">Tests</th><th scope=\"col\">Area across</th></tr></thead>"
