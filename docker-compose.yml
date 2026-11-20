@@ -12,6 +12,7 @@ services:
       - ORIGIN_SECRET=${ORIGIN_SECRET:-}
       - GOOGLE_MAPS_KEY=${GOOGLE_MAPS_KEY:-}
       - GOOGLE_MAP_ID=${GOOGLE_MAP_ID:-}
+      - CANONICAL_HOST=${CANONICAL_HOST:-}
     volumes:
       - ./data:/data
     networks:
