@@ -88,9 +88,32 @@ def add_place(pid, name, kind, lat, lon, tags=None, tests=()):
                                                              t["up_mbps"], 20, t["created_at"], t["verified"], t["ip_hash"]))
 
 
+def fake_trai(lat, lon, max_res=None):
+    """TRAI MySpeed medians for a ~2.8 km box around Koramangala only."""
+    if not (12.930 <= lat <= 12.945 and 77.620 <= lon <= 77.635):
+        return {}
+    meta = {"h3_res": 7, "across_km": 2.8, "period_start": "2026-02-15", "period_end": "2026-11-17"}
+    return {"Airtel": {"down_mbps": 90.0, "up_mbps": 12.0, "tests": 640, **meta},
+            "Jio": {"down_mbps": 150.0, "up_mbps": 20.5, "tests": 1234, **meta},
+            "Vi": {"down_mbps": 40.0, "up_mbps": 8.0, "tests": 55, **meta, "h3_res": 6, "across_km": 7.5}}
+
+
 @pytest.fixture
 def places(client, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(main, "_listing", (0.0, []))
+    monkeypatch.setattr(main, "_snap", None)
+    monkeypatch.setattr(main, "local_carrier_lookup", fake_trai)
+    with main.db() as c:
+        c.execute("DELETE FROM areas")
+        c.executemany("INSERT INTO areas VALUES (?,?,?,?,?,?,?)", [
+            ("bengaluru", "koramangala", "Koramangala", 12.9360, 77.6270, "n1", 0),
+            ("bengaluru", "far-off", "Far Off", 13.10, 77.70, "n2", 0)])
+    facts = [{"internet_access": "wlan"}, {"opening_hours": "Mo-Su 08:00-22:00"}, {"addr:street": "80 Feet Road"},
+             {"website": "https://cafe3.example"}, {"addr:housenumber": "12", "addr:street": "1st Main"}, {}]
+    for i, (lat, lon) in enumerate([(12.9340, 77.6250), (12.9370, 77.6280), (12.9380, 77.6300), (12.9365, 77.6255),
+                                    (12.9372, 77.6262), (12.9368, 77.6275)]):
+        add_place(f"n710{i}", f"Koramangala Cafe {i}", "cafe", lat, lon, facts[i])  # n7105: no venue facts
+    add_place("n7110", "Koramangala Biryani", "restaurant", 12.9350, 77.6260)  # not a work spot, no venue test
+    add_place("n7111", "Lonely Cafe", "cafe", 13.1001, 77.7001)                 # no TRAI data there
     add_place("n7001", "Brew & Byte </script>", "cafe", 12.9352, 77.6245, {"addr:suburb": "Koramangala"},
               [T("wifi", 85, 20, DAY, "x"), T("wifi", 75, 18, 3 * DAY, "y"), T("cellular", 40, 8, DAY, "x", carrier="Jio")])
     add_place("n7002", "Unverified Cafe", "cafe", 12.95, 77.60, {}, [T("wifi", 50, 10, DAY, verified=0)])
@@ -135,7 +158,7 @@ def test_home_sitemap_llms_list_only_indexable_places(places):
     assert '"@type":"WebSite"' in home
     sm = places.get("/sitemap.xml")
     assert sm.headers["content-type"].startswith("application/xml")
-    assert "<loc>https://isitfast.cloud/p/n7001</loc><lastmod>" in sm.text
+    assert "<loc>https://isitfast.space/p/n7001</loc><lastmod>" in sm.text
     assert "n7002" not in sm.text and "s0123456789a" not in sm.text and "gChIJ" not in sm.text
     llms = places.get("/llms.txt", headers={"host": "isitfast.space"}).text
     assert llms.startswith("# isitfast") and "(https://isitfast.space/p/n7001?utm_source=llms)" in llms
@@ -150,13 +173,13 @@ def test_robots_txt(places):
     assert places.head("/robots.txt").status_code == 200 and places.head("/sitemap.xml").status_code == 200
 
 
-def test_canonical_host_is_optional(places, monkeypatch):
-    assert 'rel="canonical" href="https://isitfast.space/p/n7001"' in places.get("/p/n7001", headers={"host": "isitfast.space"}).text
-    monkeypatch.setattr(main, "CANONICAL_HOST", "isitfast.cloud")
-    sp = places.get("/p/n7001", headers={"host": "isitfast.space"}).text
-    assert 'rel="canonical" href="https://isitfast.cloud/p/n7001"' in sp
-    assert 'og:url" content="https://isitfast.space/p/n7001"' in sp  # shares still use the domain people came in on
-    assert "https://isitfast.cloud/sitemap.xml" in places.get("/robots.txt", headers={"host": "isitfast.space"}).text
+def test_canonical_host_defaults_to_space(places, monkeypatch):
+    cl = places.get("/p/n7001", headers={"host": "isitfast.cloud"}).text
+    assert 'rel="canonical" href="https://isitfast.space/p/n7001"' in cl
+    assert 'og:url" content="https://isitfast.cloud/p/n7001"' in cl  # shares still use the domain people came in on
+    assert "https://isitfast.space/sitemap.xml" in places.get("/robots.txt", headers={"host": "isitfast.cloud"}).text
+    monkeypatch.setattr(main, "CANONICAL_HOST", "www.isitfast.space")
+    assert 'rel="canonical" href="https://www.isitfast.space/p/n7001"' in places.get("/p/n7001").text
 
 
 def test_crawl_log_records_only_bots_and_ai_referrals(places, monkeypatch):
@@ -177,3 +200,79 @@ def test_crawl_log_records_only_bots_and_ai_referrals(places, monkeypatch):
     monkeypatch.setattr(main, "METRICS_TOKEN", "tok")
     rep = places.get("/api/crawlers", headers={"x-metrics-token": "tok"}).json()
     assert rep["user_fetches_of_place_pages"] == [{"path": "/p/n7001", "hits": 1}]
+
+
+# ---------------------------------------------------------------- TRAI-backed cafe pages, neighbourhoods, cities
+def test_untested_cafe_page_carries_area_mobile_data(places):
+    r = places.get("/p/n7100")
+    head, body = r.text.split("</head>")
+    assert '<meta name="robots" content="index, follow, max-snippet:-1"' in head
+    assert "<title>Koramangala Cafe 0, Koramangala: mobile data nearby, WiFi not tested yet · isitfast</title>" in head
+    assert 'content="WiFi not tested on site yet. In the ~2.8 km area around Koramangala Cafe 0 (TRAI MySpeed' in head
+    assert ("Koramangala Cafe 0, Koramangala, Bengaluru: WiFi not tested on site yet. In the ~2.8 km area around "
+            "Koramangala Cafe 0 (TRAI MySpeed, 15 Feb 2026 to 17 Nov 2026; not measured at the venue), median mobile "
+            "download: Jio 150 Mbps (1,234 area tests), Airtel 90 Mbps (640 area tests); Jio had the highest median.") in body
+    assert "Vi 40" not in body.split("<table>")[0]  # a 7.5 km hexagon stays in the table, out of the quotable line
+    assert "OpenStreetMap lists WiFi here (untested" in body and '<a href="/in/bengaluru/koramangala">Cafes in Koramangala</a>' in body
+    ld = json.loads(re.search(r'<script type="application/ld\+json">(.*?)</script>', head, re.S).group(1))
+    assert "amenityFeature" not in ld["@graph"][1]  # area medians are not this venue's features
+
+
+@pytest.mark.parametrize("pid", ["n7110", "n7111", "n7105"])  # restaurant, no TRAI, no venue facts
+def test_no_page_without_venue_or_fine_area_data(places, pid):
+    assert '<meta name="robots" content="noindex, follow"' in places.get(f"/p/{pid}").text
+
+
+def test_neighbourhood_page(places):
+    r = places.get("/in/bengaluru/koramangala")
+    assert r.status_code == 200 and "max-age=600" in r.headers["cache-control"] and "x-robots-tag" not in r.headers
+    h = r.text
+    assert '<meta name="robots" content="index, follow, max-snippet:-1"' in h
+    assert '<link rel="canonical" href="https://isitfast.space/in/bengaluru/koramangala"' in h
+    assert "<h1>Cafes to work from in Koramangala, Bengaluru</h1>" in h and "Jio had the highest median" in h
+    assert re.search(r"\d+ cafes and coworking spaces listed, 1 with on-site speed tests", h)
+    assert "not measured at any one cafe" in h
+    tested, rest = h.index("Tested on site"), h.index("Cafes and coworking spaces in Koramangala")
+    assert tested < h.index('href="/p/n7001"') < rest < h.index('href="/p/n7100"')
+    assert "(OSM lists WiFi, untested)" in h and "Biryani" not in h and "Lonely" not in h and "/p/n7105" in h
+    ld = json.loads(re.search(r'<script type="application/ld\+json">(.*?)</script>', h, re.S).group(1))
+    types = {n["@type"] for n in ld["@graph"]}
+    assert {"CollectionPage", "BreadcrumbList", "WebSite"} <= types
+    assert places.get("/in/bengaluru/nowhere").status_code == 404 and places.get("/in/BAD!/x").status_code == 404
+
+
+def test_city_page_and_directory_files(places):
+    city = places.get("/in/bengaluru").text
+    assert '<a href="/in/bengaluru/koramangala">Koramangala</a>' in city and "Far Off" not in city
+    assert '<a href="/in/bengaluru/koramangala">Koramangala</a>' in places.get("/").text
+    sm = places.get("/sitemap.xml").text
+    for path in ("/in/bengaluru", "/in/bengaluru/koramangala", "/p/n7100", "/p/n7001"):
+        assert f"<loc>https://isitfast.space{path}</loc>" in sm
+    assert "/p/n7110" not in sm and "/p/n7111" not in sm and "far-off" not in sm
+    llms = places.get("/llms.txt").text
+    assert "## Bengaluru" in llms and "[Koramangala](https://isitfast.space/in/bengaluru/koramangala?utm_source=llms)" in llms
+    assert "TRAI MySpeed medians" in llms and "describe the surrounding area" in llms
+
+
+def test_area_picking_and_slugs():
+    from app import areas
+    el = [{"type": "node", "id": i, "lat": 1, "lon": 2, "tags": {"place": "quarter", "name": f"Q{i}"}} for i in range(3)]
+    el += [{"type": "node", "id": 9, "lat": 1, "lon": 2, "tags": {"place": "suburb", "name": "Bellanduru", "name:en": "Bellandur"}},
+           {"type": "node", "id": 10, "lat": 1, "lon": 2, "tags": {"place": "suburb", "name": "Bellandur"}}]
+    got = areas.pick(el)  # too few suburbs: quarters count too; duplicate slugs collapse
+    assert [a["slug"] for a in got] == ["bellandur", "q0", "q1", "q2"]
+    assert areas.slugify("HSR Layout (Sector 2)") == "hsr-layout-sector-2" and areas.slugify("Kōramangala") == "koramangala"
+    assert areas.nearest([{"lat": 12.93, "lon": 77.62}], 12.93, 77.66) is None  # ~4.3 km: too far
+
+
+def test_closed_cafe_and_broken_snapshot(places, monkeypatch):
+    with main.db() as c:
+        c.execute("UPDATE places SET gone_at=? WHERE id='n7100'", (int(time.time()),))
+    assert '<meta name="robots" content="noindex, follow"' in places.get("/p/n7100").text
+    monkeypatch.setattr(main, "_snap", None)
+
+    def boom():
+        raise RuntimeError("db gone")
+    monkeypatch.setattr(main, "build_snapshot", boom)
+    assert places.get("/").status_code == 200 and places.get("/p/n7101").status_code == 200  # pages survive
+    assert places.get("/in/bengaluru").status_code == 404 and main._snap["places"] == []

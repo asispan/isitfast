@@ -558,11 +558,11 @@ def test_place_deep_link_has_preview_tags(client):
     assert r.status_code == 200 and "no-cache" in r.headers["cache-control"]
     html = r.text
     assert "<title>Test Cafe, Bengaluru — WiFi &amp; mobile data speeds · isitfast</title>" in html
-    assert 'property="og:url" content="https://isitfast.cloud/p/n1"' in html
+    assert 'property="og:url" content="https://isitfast.space/p/n1"' in html
     assert 'content="Latest test ' in html and "(unverified)" in html  # tests here have no signed receipts
     assert "og.jpg" in html and "__TITLE__" not in html
     home = client.get("/").text
-    assert 'property="og:image" content="https://isitfast.cloud/og.jpg?v=1"' in home and "summary_large_image" in home
+    assert 'property="og:image" content="https://isitfast.space/og.jpg?v=1"' in home and "summary_large_image" in home
     assert client.get("/p/x'><script>").status_code == 404
     g = client.get("/p/gChIJ_untested_place_0123456789")  # unknown Google place: generic tags, the app opens it
     assert g.status_code == 200 and "is the cafe" in g.text
@@ -577,7 +577,7 @@ def test_each_domain_is_its_own_site(client):
     assert "isitfast.cloud" not in sp.split("</head>")[0]
     assert 'og:url" content="https://www.isitfast.cloud/"' in client.get("/", headers={"host": "www.isitfast.cloud"}).text
     evil = client.get("/", headers={"host": "evil.example"}).text
-    assert 'og:url" content="https://isitfast.cloud/"' in evil and "evil.example" not in evil
+    assert 'og:url" content="https://isitfast.space/"' in evil and "evil.example" not in evil
     assert client.get("/qr.svg", headers={"host": "isitfast.space"}).status_code == 200
 
 

@@ -31,7 +31,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analytics, metrics, seo
+from . import analytics, areas, metrics, seo
 from .geo import haversine_m, neighbour_quadkeys, quadkey
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
@@ -53,7 +53,7 @@ MAX_TEST_DISTANCE_M = 50  # every place, homes and apartments included; must mat
 # approximate. Must match MAX_ACC_SLACK_M / PRECISE_ACC_M in web/app.js.
 MAX_ACC_SLACK_M = 150
 PRECISE_ACC_M = 50
-PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://isitfast.cloud").rstrip("/")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://isitfast.space").rstrip("/")
 # Every domain the site answers on is its own equal site (no cross-domain canonical): links, QR codes and
 # link-preview URLs use the domain the visitor came in on. Anything else falls back to PUBLIC_URL.
 SITE_HOSTS = {h.strip().lower() for h in os.environ.get(
@@ -65,13 +65,13 @@ def site_base(request: Request | None) -> str:
     return f"https://{host}" if host in SITE_HOSTS else PUBLIC_URL
 
 
-# Optional single canonical domain for search engines (e.g. "isitfast.cloud"). Unset = every domain is its own
-# canonical (the equal-sites setup above). Only <link rel=canonical> and the sitemap/llms URLs follow it.
+# One canonical domain for search engines: CANONICAL_HOST, else PUBLIC_URL's host (isitfast.space). Visitors still
+# see the domain they came in on (og/QR/share URLs above); only rel=canonical, sitemap, robots and llms.txt follow it.
 CANONICAL_HOST = os.environ.get("CANONICAL_HOST", "").strip().lower()
 
 
 def canonical_base(request: Request | None) -> str:
-    return f"https://{CANONICAL_HOST}" if CANONICAL_HOST else site_base(request)
+    return f"https://{CANONICAL_HOST}" if CANONICAL_HOST else PUBLIC_URL
 SALT = os.environ.get("IP_SALT", "")
 WEAK_SALTS = {"", "isitfast", "change-me"}
 
@@ -199,6 +199,7 @@ def init_db() -> None:
         )
         c.executescript(analytics.SCHEMA)
         c.executescript(seo.CRAWL_SCHEMA)
+        c.executescript(areas.SCHEMA)
         tcols = {r["name"] for r in c.execute("PRAGMA table_info(tests)")}
         if "verified" not in tcols:  # 1 = result bounded by signed receipts from our speed Worker
             try:
@@ -336,7 +337,7 @@ except ModuleNotFoundError as ex:
     if not (ex.name or "").endswith("local_carrier"):
         raise
 
-    def local_carrier_lookup(lat: float, lon: float) -> dict:
+    def local_carrier_lookup(lat: float, lon: float, max_res: int | None = None) -> dict:
         return {}
 
 
@@ -1354,8 +1355,9 @@ def _place_tests(c: sqlite3.Connection, pid: str) -> list:
                      (pid,)).fetchall()
 
 
-def _headline(groups: list[dict]) -> str:
-    """Link-preview description: each headline network's latest verified test, with its date."""
+def _headline(groups: list[dict], local: dict | None = None, name: str = "it") -> str:
+    """Link-preview description: each headline network's latest verified test with its date, else TRAI's
+    medians for the surroundings (named as such)."""
     parts = []
     for g in seo.headline_groups(groups):
         lv = g["latest_verified"]
@@ -1364,19 +1366,22 @@ def _headline(groups: list[dict]) -> str:
                      f"verified {seo.fmt_date(lv['ts'])}")
     if parts:
         return ". ".join(parts) + ". Tested on site by people who were there."
+    around = seo.trai_sentence(local, name)
     if groups:
         lt = groups[0]["latest"]
         return (f"Latest test {seo.mbps(lt['down'])} Mbps download on {seo.fmt_date(lt['ts'])} (unverified). "
-                "Tested on site by people who were there.")
+                + (around or "Tested on site by people who were there."))
+    if around:
+        return f"WiFi not tested on site yet. {around}"
     return "No one has tested here yet. Be the first: a 20-second speed test, run at the place."
 
 
 def place_page_parts(pid: str, request: Request | None) -> dict | None:
-    """Title, description, robots, JSON-LD and summary HTML for /p/<id>, from our own data only. Google places
-    keep no name (only the place_id may be stored) and homes are private: both get no summary and stay out of
-    the index."""
+    """Title, description, robots, JSON-LD and summary HTML for /p/<id>, from our own data plus TRAI's area
+    medians. Google places keep no name (only the place_id may be stored) and homes are private: both get no
+    summary and stay out of the index."""
     with db() as c:
-        p = c.execute("SELECT id, name, kind, lat, lon, tags FROM places WHERE id=?", (pid,)).fetchone()
+        p = c.execute("SELECT id, name, kind, lat, lon, tags, gone_at FROM places WHERE id=?", (pid,)).fetchone()
         if not p:
             return None
         tests = _place_tests(c, pid)
@@ -1384,55 +1389,159 @@ def place_page_parts(pid: str, request: Request | None) -> dict | None:
     groups = seo.place_groups(tests)
     home = place["kind"] in RESIDENTIAL_KINDS
     public = bool(place["name"]) and not home
-    where = seo.locality(place["tags"], place["lat"], place["lon"]) if public else ""
+    local = local_carrier_lookup(place["lat"], place["lon"]) if public else {}
+    area = place_area(place["lat"], place["lon"]) if public else None
+    where = seo.locality(place["tags"], place["lat"], place["lon"], area and area["name"]) if public else ""
     name = place["name"] or "This place"
-    title = (f"{name}{', ' + where.split(', ')[0] if where else ''} — WiFi & mobile data speeds · isitfast"
-             if place["name"] else "WiFi & mobile data speeds here · isitfast")
-    desc = _headline(groups)
-    ok = seo.indexable(place, groups, RESIDENTIAL_KINDS)
+    short = f"{name}{', ' + where.split(', ')[0] if where else ''}"
+    if not place["name"]:
+        title = "WiFi & mobile data speeds here · isitfast"
+    elif groups:
+        title = f"{short} — WiFi & mobile data speeds · isitfast"
+    else:  # no venue test: say so, so the title never reads as a WiFi measurement
+        title = f"{short}: mobile data nearby, WiFi not tested yet · isitfast"
+    desc = _headline(groups, local, name)
+    ok = seo.indexable(place, groups, RESIDENTIAL_KINDS, local=local)
     canon = canonical_base(request)
     url = canon + f"/p/{pid}"
     return {
         "title": title, "desc": desc, "robots": "index, follow, max-snippet:-1" if ok else "noindex, follow",
         "jsonld": seo.place_jsonld(place, seo.city_for(place["lat"], place["lon"]) or "", groups, url, canon, title,
                                    SITE_DESC) if ok else "",
-        "ssr": seo.place_summary_html(place, where, groups, canon.removeprefix("https://")) if public else "",
+        "ssr": seo.place_summary_html(place, where, groups, canon.removeprefix("https://"), local,
+                                      area if area and area.get("indexable") else None) if public else "",
     }
 
 
-_listing: tuple[float, list] = (0.0, [])
+# ---------------------------------------------------------------- the crawlable directory: cities, areas, places
+SNAPSHOT_TTL = 900
+_snap: dict | None = None
+_snap_lock = threading.Lock()
+_snap_building = False
+
+
+def _area_url(city: str, slug: str) -> str:
+    return f"/in/{city}/{slug}"
+
+
+def build_snapshot() -> dict:
+    """Every indexable place, grouped into OSM neighbourhoods (app/areas.py) and cities, with TRAI medians for
+    each place and each neighbourhood centre. Feeds /, /in/..., sitemap.xml and llms.txt."""
+    t0 = time.perf_counter()
+    with db() as c:
+        areas_by_city: dict[str, list[dict]] = {}
+        for r in c.execute("SELECT city, slug, name, lat, lon FROM areas"):
+            areas_by_city.setdefault(r["city"], []).append(dict(r))
+        tested_ids = {r[0] for r in c.execute("SELECT DISTINCT place_id FROM tests")}
+        kinds = sorted(seo.WORK_KINDS)
+        rows = c.execute(
+            f"SELECT id, name, kind, lat, lon, tags, gone_at FROM places WHERE name IS NOT NULL AND "
+            f"((kind IN ({','.join('?' * len(kinds))}) AND gone_at IS NULL) OR id IN "
+            "(SELECT place_id FROM tests WHERE verified=1))", kinds).fetchall()
+        places, areas_out = [], {}
+        for p in rows:
+            if not seo.OSM_ID.match(p["id"]) or p["kind"] in RESIDENTIAL_KINDS:
+                continue
+            place = {**dict(p), "tags": json.loads(p["tags"] or "{}")}
+            groups = seo.place_groups(_place_tests(c, p["id"])) if p["id"] in tested_ids else []
+            local = local_carrier_lookup(p["lat"], p["lon"])
+            ok = seo.indexable(place, groups, RESIDENTIAL_KINDS, local=local)
+            if not ok and p["kind"] not in seo.WORK_KINDS:
+                continue
+            city = seo.city_key_for(p["lat"], p["lon"])
+            area = areas.nearest(areas_by_city.get(city, []), p["lat"], p["lon"]) if city else None
+            tested_line, last = None, None
+            hg = seo.headline_groups(groups)
+            if hg:
+                g = hg[0]
+                lv, n = g["latest_verified"], (g["verified"] or {}).get("readings", 1)
+                tested_line = (f"{g['label']} {seo.mbps(lv['down'])} Mbps download, latest verified test "
+                               f"{seo.fmt_date(lv['ts'])} ({n} verified reading{'s' if n != 1 else ''})")
+                last = max(x["latest"]["ts"] for x in groups)
+            entry = {"id": p["id"], "name": p["name"], "kind": p["kind"], "lat": p["lat"], "lon": p["lon"],
+                     "tested_line": tested_line, "last": last, "indexable": ok,
+                     "wifi_tag": place["tags"].get("internet_access") in ("wlan", "yes", "wifi"),
+                     "where": seo.locality(place["tags"], p["lat"], p["lon"], area and area["name"])}
+            if ok:
+                places.append(entry)
+            if area:  # neighbourhood lists show every cafe there, including ones whose own page is not indexed
+                key = (city, area["slug"])
+                a = areas_out.setdefault(key, {**area, "url": _area_url(city, area["slug"]), "places": []})
+                a["places"].append(entry)
+    cities: dict[str, dict] = {}
+    for (city, slug), a in areas_out.items():
+        a["places"].sort(key=lambda e: (e["tested_line"] is None, e["name"].lower()))
+        a["n_places"] = len(a["places"])
+        a["n_tested"] = sum(1 for e in a["places"] if e["tested_line"])
+        a["local"] = local_carrier_lookup(a["lat"], a["lon"], max_res=seo.TRAI_MIN_RES)  # one ~2.8 km hexagon
+        a["indexable"] = a["n_places"] >= seo.AREA_MIN_PLACES and seo.trai_ok(a["local"])
+        a["line"] = seo.area_line(a)
+        cities.setdefault(city, {"key": city, "name": seo.city_label(city), "url": f"/in/{city}", "areas": [],
+                                 "all_areas": []})["all_areas"].append(a)
+    for cdict in cities.values():
+        cdict["areas"] = sorted((a for a in cdict["all_areas"] if a["indexable"]), key=lambda a: -a["n_places"])
+    tested = sorted((e for e in places if e["tested_line"]), key=lambda e: -e["last"])
+    timing("snapshot", (time.perf_counter() - t0) * 1000)
+    return {"places": places, "tested": tested, "areas": areas_out, "areas_by_city": areas_by_city,
+            "cities": {k: v for k, v in sorted(cities.items(), key=lambda kv: -len(kv[1]["areas"]))},
+            "built": time.time()}
+
+
+EMPTY_SNAPSHOT = {"places": [], "tested": [], "areas": {}, "areas_by_city": {}, "cities": {}, "built": 0.0}
+SNAPSHOT_RETRY_S = 60
+
+
+def _rebuild() -> None:
+    """Rebuild the directory; on failure keep serving the old one (or an empty one) and retry in a minute."""
+    global _snap, _snap_building
+    try:
+        _snap = build_snapshot()
+    except Exception as ex:  # noqa: BLE001 — a broken rebuild must never take pages down
+        print(f"[snapshot] failed: {ex!r}", flush=True)
+        metric("snapshot_error", type(ex).__name__)
+        base = _snap or EMPTY_SNAPSHOT
+        _snap = {**base, "built": time.time() - SNAPSHOT_TTL + SNAPSHOT_RETRY_S}
+    finally:
+        _snap_building = False
+
+
+def snapshot() -> dict:
+    """The cached directory: built on first use, then refreshed in the background (stale data is served while
+    a rebuild runs, so no request waits for it)."""
+    global _snap_building
+    if _snap is None:
+        with _snap_lock:
+            if _snap is None:
+                _rebuild()
+    elif time.time() - _snap["built"] > SNAPSHOT_TTL and not _snap_building:
+        with _snap_lock:
+            if not _snap_building and time.time() - _snap["built"] > SNAPSHOT_TTL:
+                _snap_building = True
+                threading.Thread(target=_rebuild, daemon=True).start()
+    return _snap
+
+
+def place_area(lat: float, lon: float) -> dict | None:
+    """The neighbourhood a point belongs to, with its page URL and whether that page is indexed."""
+    snap = snapshot()
+    city = seo.city_key_for(lat, lon)
+    a = areas.nearest(snap["areas_by_city"].get(city, []), lat, lon) if city else None
+    if not a:
+        return None
+    built = snap["areas"].get((city, a["slug"]))
+    return {"name": a["name"], "url": _area_url(city, a["slug"]), "indexable": bool(built and built["indexable"])}
 
 
 def indexable_places() -> list[dict]:
-    """Every tested place whose page is indexable, newest test first: {id, name, where, line, last}.
-    Feeds the home page links, sitemap.xml and llms.txt. Cached per worker for 5 minutes."""
-    global _listing
-    if time.time() - _listing[0] < 300:
-        return _listing[1]
-    out = []
-    with db() as c:
-        rows = c.execute("SELECT id, name, kind, lat, lon, tags FROM places WHERE name IS NOT NULL AND id IN "
-                         "(SELECT place_id FROM tests WHERE verified=1)").fetchall()
-        for p in rows:
-            place = {**dict(p), "tags": json.loads(p["tags"] or "{}")}
-            groups = seo.place_groups(_place_tests(c, p["id"]))
-            if not seo.indexable(place, groups, RESIDENTIAL_KINDS):
-                continue
-            g = seo.headline_groups(groups)[0]
-            lv, n = g["latest_verified"], (g["verified"] or {}).get("readings", 1)
-            line = (f"{g['label']} {seo.mbps(lv['down'])} Mbps download, latest verified test "
-                    f"{seo.fmt_date(lv['ts'])} ({n} verified reading{'s' if n != 1 else ''})")
-            out.append({"id": p["id"], "name": p["name"], "where": seo.locality(place["tags"], p["lat"], p["lon"]),
-                        "line": line, "last": max(x["latest"]["ts"] for x in groups)})
-    out.sort(key=lambda x: -x["last"])
-    _listing = (time.time(), out)
-    return out
+    return snapshot()["places"]
 
 
 @app.get("/")
 @app.get("/index.html")
 def index(request: Request):
-    return render_index(request, ssr=seo.home_summary_html(indexable_places()[:300]))
+    snap = snapshot()
+    cities = [c for c in snap["cities"].values() if c["areas"]]
+    return render_index(request, ssr=seo.home_summary_html(cities, snap["tested"][:100]))
 
 
 @app.get("/p/{pid}")
@@ -1448,6 +1557,39 @@ def place_page(pid: str, request: Request):
                         ssr=t["ssr"])
 
 
+SLUG_RE = re.compile(r"^[a-z0-9-]{1,60}$")
+DIR_CACHE = {"Cache-Control": "public, max-age=600"}
+
+
+def _dir_page(request: Request, path: str, parts: tuple, ok: bool) -> Response:
+    title, desc, ld, body = parts
+    robots = "index, follow, max-snippet:-1" if ok else "noindex, follow"
+    html = seo.page_shell(title, desc, canonical_base(request) + path, robots, ld, body)
+    headers = dict(DIR_CACHE, **({} if ok else {"X-Robots-Tag": "noindex"}))
+    return Response(html, media_type="text/html; charset=utf-8", headers=headers)
+
+
+@app.api_route("/in/{city}", methods=["GET", "HEAD"])
+def city_page(city: str, request: Request):
+    """Neighbourhoods of a city with their cafes and mobile-data medians."""
+    c = snapshot()["cities"].get(city) if SLUG_RE.fullmatch(city) else None
+    if not c or not c["areas"]:
+        raise HTTPException(404, "unknown city")
+    return _dir_page(request, c["url"], seo.city_page(c, canonical_base(request)), True)
+
+
+@app.api_route("/in/{city}/{slug}", methods=["GET", "HEAD"])
+def area_page(city: str, slug: str, request: Request):
+    """Cafes and coworking spaces in one neighbourhood, tested ones first, with TRAI's per-carrier medians."""
+    snap = snapshot()
+    a = snap["areas"].get((city, slug)) if SLUG_RE.fullmatch(city) and SLUG_RE.fullmatch(slug) else None
+    if not a:
+        raise HTTPException(404, "unknown area")
+    c = snap["cities"][city]
+    base = canonical_base(request)
+    return _dir_page(request, a["url"], seo.area_page(a, c, base, base.removeprefix("https://")), a["indexable"])
+
+
 TEXT_CACHE = {"Cache-Control": "public, max-age=3600"}
 
 
@@ -1458,18 +1600,23 @@ def robots_txt(request: Request):
 
 @app.api_route("/sitemap.xml", methods=["GET", "HEAD"])
 def sitemap_xml(request: Request):
-    places = indexable_places()
-    urls = [("/", max((p["last"] for p in places), default=None)), ("/about.html", None)]
-    urls += [(f"/p/{p['id']}", p["last"]) for p in places]
+    snap = snapshot()
+    urls = [("/", max((p["last"] for p in snap["tested"]), default=None)), ("/about.html", None)]
+    for c in snap["cities"].values():
+        if c["areas"]:
+            urls.append((c["url"], None))
+            urls += [(a["url"], None) for a in c["areas"]]
+    urls += [(f"/p/{p['id']}", p["last"]) for p in snap["places"]]
     return Response(seo.sitemap_xml(canonical_base(request), urls), media_type="application/xml", headers=TEXT_CACHE)
 
 
 @app.api_route("/llms.txt", methods=["GET", "HEAD"])
 def llms_txt(request: Request):
-    places = indexable_places()
+    snap = snapshot()
     with db() as c:
         n_verified = c.execute("SELECT COUNT(*) FROM tests WHERE verified=1").fetchone()[0]
-    return Response(seo.llms_txt(canonical_base(request), places, len(places), n_verified),
+    cities = [c for c in snap["cities"].values() if c["areas"]]
+    return Response(seo.llms_txt(canonical_base(request), cities, snap["tested"], len(snap["places"]), n_verified),
                     media_type="text/plain; charset=utf-8", headers=TEXT_CACHE)
 
 

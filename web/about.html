@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>About — isitfast.cloud</title>
+  <title>About — isitfast.space</title>
   <meta name="description" content="How isitfast measures cafe and coworking WiFi and mobile data speeds: on-site browser tests within 50 m, server-signed receipts, and how to cite the numbers." />
   <link rel="icon" href="/favicon.svg?v=8" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=7" />
@@ -23,7 +23,7 @@
 </head>
 <body>
   <p><a class="back" href="/"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="#2A3BD4" stroke-width="2.4"/><path d="M16 16H29M29 12.5v7" stroke="#2A3BD4" stroke-width="2.4" stroke-linecap="round"/><circle cx="16" cy="16" r="3.4" fill="#2A3BD4"/></svg>← Back to the map</a></p>
-  <h1>About isitfast.cloud</h1>
+  <h1>About isitfast.space</h1>
   <p>A map of cafes and coworking spaces with the internet numbers that matter when you want to work from one. The ring in the logo is the test range: a speed test only counts if it was run within 50 m of the place.</p>
   <h2>Where the numbers come from</h2>
   <ul>
@@ -32,6 +32,7 @@
       aggregated into ~600 m map tiles. All carriers are combined; Ookla's open data does not break results down by carrier.
       We show the tile containing the place, or the average of the surrounding tiles when that tile has no tests.
       Licensed <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>.</li>
+    <li><strong>Mobile data around a place, by carrier</strong> — medians of crowd-sourced tests from TRAI's MySpeed app (<a href="https://myspeed.trai.gov.in/" target="_blank" rel="noopener">TRAI Network Anubhav</a>), per hexagon of about 0.4 to 3 km across, 15 Feb to 17 Nov 2026. They describe the surrounding area, not a particular venue, and every cafe in the same hexagon shows the same figure.</li>
     <li><strong>Home/office broadband nearby</strong> — the fixed-network counterpart from the same Ookla dataset. It describes broadband in the area, not this place's WiFi.</li>
     <li><strong>This place's WiFi</strong> and <strong>mobile data by carrier</strong> — speed tests people run in their browser while at the place. Tests run against Cloudflare's nearest edge (our own endpoint, <code>speed.isitfast.cloud</code>) or, when it is clearly closer to you, our server in Mumbai (<code>speed-in.isitfast.cloud</code>) — some Indian ISPs route Cloudflare traffic via Singapore or Europe, which reads well below the line's real speed. Both sign how much data they actually sent and received so results can be checked; <code>speed.cloudflare.com</code> is used if neither is reachable. On mobile data a test uses at most about 100 MB; the carrier or ISP is identified from the network's ASN. We show the latest test and when it ran. A test is accepted only if your device reports being within 50 m of the place, plus the margin of error it reports (up to 150 m — laptops find themselves by WiFi and are often off by 100 m or more); tests with a rough location are marked approximate (≈). Your location is used for that check and is not stored with your test; the one exception is the first test at a Google-listed or newly named place, whose pin is placed where that test was run.</li>
     <li><strong>Map</strong> — <a href="https://www.google.com/maps" target="_blank" rel="noopener">Google Maps</a>. Tap any cafe, restaurant, shop or office on the map and test it while you are there; it gets a labelled pin once tested. Place names and addresses are shown live from Google and are not stored by us — we keep only Google's place ID and the speed tests. Loading the map sends your browser's requests to Google (<a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's privacy policy</a>).</li>
@@ -44,8 +45,8 @@
     <li><strong>Verified.</strong> Our speed servers count the bytes they actually send and receive and sign a receipt. The speed a browser reports must be within 2× of what the server measured. Tests that ran on the <code>speed.cloudflare.com</code> fallback are kept but marked unverified.</li>
     <li><strong>Latest and median.</strong> The app shows each network's latest test. Place pages also show the median of verified readings from the last 90 days, where repeated tests from one connection within an hour count once. A place needs at least 3 verified readings, on 2 different days, from 2 different connections, before we would call it fast or slow against others.</li>
     <li><strong>Networks are separate.</strong> WiFi (per internet provider) and each mobile carrier are reported on their own, never blended.</li>
-    <li><strong>Venue vs area.</strong> Ookla and M-Lab figures describe the neighbourhood or city, not the venue, and are never quoted as a venue's speed.</li>
-    <li><strong>Citing.</strong> Please quote a figure with its test count and date and link the place page, e.g. “Cafe X: WiFi 85 Mbps download (isitfast.cloud, 4 tests, last tested 4 Nov 2026)”. A place missing from the map has not been tested yet; that says nothing about its speed.</li>
+    <li><strong>Venue vs area.</strong> TRAI MySpeed, Ookla and M-Lab figures describe the surrounding area or city, not the venue, and are never quoted as a venue's speed. TRAI figures are medians for one hexagon (about 0.4 to 3 km across); indoor signal may be weaker. We only say one carrier had the highest median when both have at least 100 tests in same-size hexagons and the lead is at least 20%.</li>
+    <li><strong>Citing.</strong> Please quote a figure with its test count and date and link the place page, e.g. “Cafe X: WiFi 85 Mbps download (isitfast.space, 4 tests, last tested 4 Nov 2026)”. A place missing from the map has not been tested yet; that says nothing about its speed.</li>
   </ul>
   <h2>Privacy</h2>
   <p>No accounts, no cookies, no ad or analytics trackers. To see whether the site is useful, it counts a few anonymous steps on our own server — a visit, opening a place, running or sharing a test, or the location check failing (with only a rough reason such as "location blocked" or "about 200 m away", never your position). Visits are counted once per day using a code that cannot be linked to you or to your visits on other days: its secret ingredient is random and deleted every night. Links shared from the site carry a short tag like <code>?r=wa</code> so we can see which channel brought people.</p>

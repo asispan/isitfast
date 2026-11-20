@@ -86,9 +86,19 @@ median of verified readings from the last 90 days, one reading per connection pe
 interactive panel; every client gets the same HTML. A place page is indexed only when it has a publishable name
 (never Google's), a non-residential kind and at least one verified test; everything else is `noindex`. `/`
 lists the indexable places; `/robots.txt` (allow all, Content-Signal yes), `/sitemap.xml` and `/llms.txt` are
-generated from the same list. Optional `CANONICAL_HOST` points every domain's `rel=canonical` at one host (unset
-= equal sites). AI/search crawler hits and AI-assistant referrals are logged to `crawl_log` (agent, path, status;
+generated from the same list. `rel=canonical`, sitemap, robots and llms.txt use `CANONICAL_HOST`, else `PUBLIC_URL`
+(default `https://isitfast.space`); og/QR/share URLs still follow the visitor's host. AI/search crawler hits and AI-assistant referrals are logged to `crawl_log` (agent, path, status;
 no IPs) and summarised at `GET /api/crawlers?days=7` (same token as `/api/metrics`).
+
+**Neighbourhood and city pages (`app/areas.py`).** OSM `place=suburb` nodes for each seeded city (quarters when a
+city has fewer than 10 suburbs) are the neighbourhoods; every cafe/coworking space belongs to the nearest one within
+3 km. `/in/<city>/<area>` lists them (tested first) with TRAI MySpeed medians for one ~2.8 km hexagon at the centre,
+and `/in/<city>` lists the areas; an area is indexed with at least 5 places and 2 carriers measured that finely.
+A cafe with no venue test gets an indexed page only if TRAI covers its ~2.8 km surroundings for 2+ carriers AND
+OSM gives a fact about the venue itself (address, hours, website, WiFi tag); TRAI figures are always labelled as
+area data, and a carrier is called "highest median" only with 100+ tests each, same hexagon size and a 20% lead.
+The directory is rebuilt in the background every 15 minutes (~0.3 s); a failed rebuild keeps the old one.
+Areas refresh with the weekly OSM seed, or on demand with `python -m app.areas [city ...]`.
 
 **Product analytics (first-party, cookieless).** The page sends funnel events (`pageview`, `panel_open`,
 `test_cta_shown`, `gate_fail`, `test_start`, `test_complete`, `share_click`, …) to `POST /api/e` with

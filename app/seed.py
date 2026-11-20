@@ -13,7 +13,7 @@ import asyncio
 import json
 import time
 
-from . import osm
+from . import areas, osm
 from .geo import quadkey
 from .main import CELL, OVERPASS, PLACE_COLS, UA, bump_tiles, db, init_db, tile_of
 
@@ -110,6 +110,7 @@ async def main() -> None:
         except Exception as ex:  # keep going city by city
             print(f"[{name}] failed: {ex}", flush=True)
         await asyncio.sleep(5)
+    await areas.refresh(a.cities or None)  # neighbourhood pages (app/areas.py)
     if not a.cities:
         with db() as c:
             c.execute("INSERT OR REPLACE INTO jobs VALUES (?, ?)", (JOB, int(time.time())))
