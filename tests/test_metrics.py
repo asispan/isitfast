@@ -32,6 +32,8 @@ def test_metrics_aggregate_routes_and_telemetry(client):
         client.get("/healthz")
     assert client.post("/api/telemetry", json={"endpoint": "own", "outcome": "saved", "network": "wifi",
                                                 "down_mb": 120.5, "up_mb": 30}).status_code == 204
+    assert client.post("/api/telemetry", json={"endpoint": "india", "outcome": "saved", "network": "wifi",
+                                                "down_mb": 10, "up_mb": 5}).status_code == 204
     assert client.post("/api/telemetry", json={"endpoint": "evil", "outcome": "saved", "network": "wifi",
                                                 "down_mb": 1, "up_mb": 1}).status_code == 422
     m = client.get("/api/metrics", headers={"x-metrics-token": "t0ken"}).json()

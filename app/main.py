@@ -1084,7 +1084,7 @@ METRICS_TOKEN = os.environ.get("METRICS_TOKEN", "")
 
 class TelemetryIn(BaseModel):
     """Client beacon after a speed test (no identifiers): which endpoint ran it and the data it used."""
-    endpoint: str = Field(pattern="^(own|fallback)$")
+    endpoint: str = Field(pattern="^(own|india|fallback)$")
     outcome: str = Field(pattern="^(saved|rejected|failed|cancelled)$")
     network: str = Field(pattern="^(wifi|cellular)$")
     down_mb: float = Field(ge=0, le=5000)

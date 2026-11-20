@@ -1,0 +1,18 @@
+{
+	email asis.panda.23@gmail.com
+	servers {
+		# HTTP/1.1 + HTTP/2 only: the page's parallel streams then ride separate TCP connections (h1)
+		# or one h2 connection; no QUIC (UDP 443 is closed and QUIC costs a lot of CPU at speed).
+		protocols h1 h2
+	}
+}
+
+speed-in.isitfast.cloud {
+	# no `encode`: nothing is compressed, so bytes counted are bytes sent
+	reverse_proxy 127.0.0.1:8080 {
+		flush_interval -1
+		transport http {
+			keepalive 90s
+		}
+	}
+}

@@ -1,7 +1,8 @@
-/* In-browser speed test against our own Cloudflare Worker (speed.isitfast.cloud, nearest edge), with
-   Cloudflare's public speed.cloudflare.com as a fallback. Both expose /__down and /__up.
+/* In-browser speed test against our own Cloudflare Worker (speed.isitfast.cloud, nearest edge) or our
+   India server (speed-in.isitfast.cloud, GCE Mumbai; speed-server/) when it is clearly closer, with
+   Cloudflare's public speed.cloudflare.com as a fallback. All expose /__down and /__up.
 
-   Our Worker signs byte receipts (see speed-worker/src/index.js): every 4 MiB of a download ends in a
+   Our Worker and India server sign byte receipts (speed-worker/src/index.js, speed-server/server.mjs): every 4 MiB of a download ends in a
    128-byte receipt, and each upload response is one. They are sent with the result so the server can
    check the claimed speeds against data that was really transferred.
 
@@ -17,7 +18,8 @@
 
    Returns { down_mbps, up_mbps, ping_ms, jitter_ms, asn, colo }. */
 (function () {
-  const OWN = "https://speed.isitfast.cloud", FALLBACK = "https://speed.cloudflare.com";
+  const OWN = "https://speed.isitfast.cloud", INDIA = "https://speed-in.isitfast.cloud";
+  const FALLBACK = "https://speed.cloudflare.com";
   // Receipt every 1 MiB: on mobile data a stream may only run ~5 s, so coarse receipts undercount it.
   const BLOCK = 1024 * 1024, RECEIPT = 128;
   let BASE = OWN, SID = null, moved = 0, ownFailed = false;
@@ -206,16 +208,38 @@
     });
   }
 
-  // Our Worker if it answers quickly, else Cloudflare's public endpoint (no receipts then).
-  async function pickEndpoint(sid) {
-    try {
+  // Our Cloudflare Worker or our India server (GCE Mumbai), whichever is clearly closer, else Cloudflare's
+  // public endpoint (no receipts then). Several Indian ISPs (Hathway, often Airtel/Jio) send traffic for
+  // Cloudflare free-plan sites to Singapore or Marseille, 60–160 ms away, which reads far below the line's
+  // real speed; the India server is ~10–40 ms from most Indian users. Cloudflare stays the default when
+  // it is about as close, since its traffic costs us nothing.
+  async function rtt(base) {
+    const once = async () => {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 3000);
-      const r = await fetch(`${OWN}/__down?bytes=0&r=${rnd()}`, { cache: "no-store", signal: ctrl.signal });
-      clearTimeout(t);
-      if (r.ok) { BASE = OWN; SID = sid || null; ownFailed = false; return; }
-    } catch { /* fall through */ }
-    BASE = FALLBACK; SID = null; ownFailed = true;
+      const t0 = performance.now();
+      try {
+        const r = await fetch(`${base}/__down?bytes=0&r=${rnd()}`, { cache: "no-store", signal: ctrl.signal });
+        return r.ok ? performance.now() - t0 : Infinity;
+      } catch { return Infinity; } finally { clearTimeout(t); }
+    };
+    if (await once() === Infinity) return Infinity; // the first round trip also opens the connection
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) best = Math.min(best, await once());
+    return best;
+  }
+
+  async function pickEndpoint(sid) {
+    const force = new URLSearchParams(location.search).get("speed"); // QA: ?speed=india|own
+    if (force === "india" || force === "own") { BASE = force === "india" ? INDIA : OWN; SID = sid || null; return; }
+    const [own, india] = await Promise.all([rtt(OWN), rtt(INDIA)]);
+    ownFailed = own === Infinity;
+    const useIndia = india !== Infinity && (own === Infinity || india < own - 15 || india < own * 0.6);
+    if (useIndia || own !== Infinity) {
+      BASE = useIndia ? INDIA : OWN; SID = sid || null;
+      return;
+    }
+    BASE = FALLBACK; SID = null;
   }
 
   async function run({ network, sid, onPing, onDown, onUp, onPhase } = {}) {
@@ -235,7 +259,7 @@
     // ASN is taken server-side from Cloudflare's view of the submit request.
     return { down_mbps: down, up_mbps: up, ping_ms: lat.ping, jitter_ms: lat.jitter, asn: null, colo: where,
       receipts: SID ? receipts.slice(0, 400) : null,
-      meta: { endpoint: BASE === OWN ? "own" : "fallback", own_failed: ownFailed,
+      meta: { endpoint: BASE === OWN ? "own" : BASE === INDIA ? "india" : "fallback", own_failed: ownFailed,
               down_mb: Math.round(downMB * 10) / 10, up_mb: Math.round((moved / 1e6 - downMB) * 10) / 10 } };
   }
 
