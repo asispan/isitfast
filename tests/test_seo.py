@@ -98,6 +98,15 @@ def fake_trai(lat, lon, max_res=None):
             "Vi": {"down_mbps": 40.0, "up_mbps": 8.0, "tests": 55, **meta, "h3_res": 6, "across_km": 7.5}}
 
 
+def test_adjacent_hexagon_is_labelled():
+    meta = {"h3_res": 7, "across_km": 2.8, "period_start": "2026-02-15", "period_end": "2026-11-19"}
+    local = {"Jio": {"down_mbps": 120.0, "up_mbps": 9.0, "tests": 300, **meta, "adjacent": True, "adjacent_m": 2310},
+             "Airtel": {"down_mbps": 80.0, "up_mbps": 9.0, "tests": 200, **meta}}
+    s = seo.trai_sentence(local, "Cafe Y")
+    assert "Jio 120 Mbps (300 area tests, from the adjacent hexagon ~2,310 m away)" in s and "Airtel 80 Mbps (200 area tests)" in s
+    assert seo.trai_ok(local) and "adjacent hexagon, centre ~2,310 m away" in seo.trai_table_html(local, "x")
+
+
 @pytest.fixture
 def places(client, monkeypatch):  # noqa: F811
     monkeypatch.setattr(main, "_snap", None)

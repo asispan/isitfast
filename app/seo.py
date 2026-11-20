@@ -187,7 +187,7 @@ def trai_rows(local: dict | None, min_res: int = 0) -> list[dict]:
     min_res=TRAI_MIN_RES (no 7-20 km hexagons beside a cafe's name); tables show every row with its size."""
     out = [{"carrier": k, "down": v["down_mbps"], "up": v.get("up_mbps"), "tests": v.get("tests", 0),
             "across_km": v.get("across_km"), "res": v.get("h3_res", 0),
-            "start": v.get("period_start"), "end": v.get("period_end")}
+            "start": v.get("period_start"), "end": v.get("period_end"), "adjacent_m": v.get("adjacent_m")}
            for k, v in (local or {}).items() if v.get("down_mbps") is not None and v.get("h3_res", 0) >= min_res
            and v.get("across_km")]
     return sorted(out, key=lambda r: -r["down"])
@@ -232,7 +232,9 @@ def trai_sentence(local: dict | None, where: str = "it", unit: str = "the venue"
     rows = trai_rows(local, TRAI_MIN_RES)
     if not rows:
         return ""
-    nums = ", ".join(f"{r['carrier']} {mbps(r['down'])} Mbps ({r['tests']:,} area tests)" for r in rows)
+    nums = ", ".join(f"{r['carrier']} {mbps(r['down'])} Mbps ({r['tests']:,} area tests"
+                     + (f", from the adjacent hexagon ~{r['adjacent_m']:,} m away" if r["adjacent_m"] is not None else "")
+                     + ")" for r in rows)
     lead = trai_leader(rows)
     best = f"; {lead['carrier']} had the highest median" if lead else ""
     period = trai_period(rows)
@@ -247,7 +249,9 @@ def trai_table_html(local: dict | None, caption: str) -> str:
     body = "".join(
         f"<tr><th scope=\"row\">{esc(r['carrier'])}</th><td>{mbps(r['down'])}</td>"
         f"<td>{mbps(r['up']) if r['up'] is not None else '—'}</td><td>{r['tests']:,}</td>"
-        f"<td>~{size_txt(r['across_km'])}</td></tr>" for r in rows)
+        f"<td>~{size_txt(r['across_km'])}"
+        + (f" <small>(adjacent hexagon, centre ~{r['adjacent_m']:,} m away)</small>" if r["adjacent_m"] is not None else "")
+        + "</td></tr>" for r in rows)
     return (f"<table><caption>{esc(caption)}</caption><thead><tr><th scope=\"col\">Carrier</th>"
             "<th scope=\"col\">Median download (Mbps)</th><th scope=\"col\">Median upload (Mbps)</th>"
             "<th scope=\"col\">Tests</th><th scope=\"col\">Area across</th></tr></thead>"
@@ -436,8 +440,9 @@ def llms_txt(base: str, cities: list[dict], tested: list[dict], n_pages: int, n_
         "- On-site tests describe the venue. Each place page shows the latest test and, where available, the median "
         f"of verified readings from the last {WINDOW_DAYS} days. \"Verified\" means our speed server counted the "
         "bytes and signed a receipt. One test is a hint, not a verdict: quote the test count and date.",
-        "- TRAI MySpeed medians (crowd-sourced, per carrier, per ~0.4-3 km hexagon) describe the surrounding area, "
-        "not the venue. Quote them as \"around <place>\", with the area size and period.",
+        "- TRAI MySpeed medians (crowd-sourced, per carrier, per ~0.15-3 km hexagon) describe the surrounding area, "
+        "not the venue. Quote them as \"around <place>\", with the area size and period. When the place's own "
+        "hexagon has too few tests, the touching hexagon is used and labelled \"adjacent\"; nothing further away is.",
         f"- Coverage: {n_pages} cafe and coworking pages, {n_verified} verified on-site tests. A place without an "
         "on-site test is untested, not slow.",
         f"- Cite a venue test as: \"<place>: <figure> (isitfast, <n> tests, <date>)\", linking the place page on {base}.",
