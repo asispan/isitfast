@@ -79,6 +79,17 @@ OSM/visitor place opens that place instead, so tests aren't split.
 returns per-route latency and counts, event-loop lag, threadpool saturation, SQLite lock errors, the test
 funnel, outbound calls per upstream, client telemetry, row counts, file sizes and the last backup.
 
+**Search and AI engines (`app/seo.py`).** Most AI fetchers don't run JavaScript, so `/p/<id>` carries the
+place's numbers in its HTML: a heading, one dated answer sentence and a per-network table (latest test, plus the
+median of verified readings from the last 90 days, one reading per connection per hour), with schema.org JSON-LD
+(`CafeOrCoffeeShop`/`LocalBusiness` + `amenityFeature` speeds in Mbps). The app replaces that summary with the
+interactive panel; every client gets the same HTML. A place page is indexed only when it has a publishable name
+(never Google's), a non-residential kind and at least one verified test; everything else is `noindex`. `/`
+lists the indexable places; `/robots.txt` (allow all, Content-Signal yes), `/sitemap.xml` and `/llms.txt` are
+generated from the same list. Optional `CANONICAL_HOST` points every domain's `rel=canonical` at one host (unset
+= equal sites). AI/search crawler hits and AI-assistant referrals are logged to `crawl_log` (agent, path, status;
+no IPs) and summarised at `GET /api/crawlers?days=7` (same token as `/api/metrics`).
+
 **Product analytics (first-party, cookieless).** The page sends funnel events (`pageview`, `panel_open`,
 `test_cta_shown`, `gate_fail`, `test_start`, `test_complete`, `share_click`, …) to `POST /api/e` with
 `sendBeacon`. No cookies, no storage, no third-party script. A visitor is counted per day by

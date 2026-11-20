@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>About — isitfast.cloud</title>
+  <meta name="description" content="How isitfast measures cafe and coworking WiFi and mobile data speeds: on-site browser tests within 50 m, server-signed receipts, and how to cite the numbers." />
   <link rel="icon" href="/favicon.svg?v=8" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=7" />
   <link rel="preload" href="/fonts/geist-latin.woff2?v=1" as="font" type="font/woff2" crossorigin />
@@ -36,6 +37,15 @@
     <li><strong>Map</strong> — <a href="https://www.google.com/maps" target="_blank" rel="noopener">Google Maps</a>. Tap any cafe, restaurant, shop or office on the map and test it while you are there; it gets a labelled pin once tested. Place names and addresses are shown live from Google and are not stored by us — we keep only Google's place ID and the speed tests. Loading the map sends your browser's requests to Google (<a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's privacy policy</a>).</li>
     <li><strong>Places (the dots)</strong> — cafes, coworking spaces, restaurants, offices and apartment buildings from <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> (&copy; OpenStreetMap contributors), refreshed weekly, plus places named by visitors. Houses and other buildings appear once someone tests there.</li>
     <li><strong>Type and icons</strong> — <a href="https://vercel.com/font" target="_blank" rel="noopener">Geist</a> (SIL Open Font License); speed icon by <a href="https://icons8.com/icon/pEQXFEQYQHQk/speed" target="_blank" rel="noopener">Icons8</a>.</li>
+  </ul>
+  <h2 id="method">How a test is checked, and how to cite the numbers</h2>
+  <ul>
+    <li><strong>On site.</strong> A test counts only if the device reports being within 50 m of the place (plus its reported margin of error, up to 150 m). Tests with a rough location are marked approximate.</li>
+    <li><strong>Verified.</strong> Our speed servers count the bytes they actually send and receive and sign a receipt. The speed a browser reports must be within 2× of what the server measured. Tests that ran on the <code>speed.cloudflare.com</code> fallback are kept but marked unverified.</li>
+    <li><strong>Latest and median.</strong> The app shows each network's latest test. Place pages also show the median of verified readings from the last 90 days, where repeated tests from one connection within an hour count once. A place needs at least 3 verified readings, on 2 different days, from 2 different connections, before we would call it fast or slow against others.</li>
+    <li><strong>Networks are separate.</strong> WiFi (per internet provider) and each mobile carrier are reported on their own, never blended.</li>
+    <li><strong>Venue vs area.</strong> Ookla and M-Lab figures describe the neighbourhood or city, not the venue, and are never quoted as a venue's speed.</li>
+    <li><strong>Citing.</strong> Please quote a figure with its test count and date and link the place page, e.g. “Cafe X: WiFi 85 Mbps download (isitfast.cloud, 4 tests, last tested 4 Nov 2026)”. A place missing from the map has not been tested yet; that says nothing about its speed.</li>
   </ul>
   <h2>Privacy</h2>
   <p>No accounts, no cookies, no ad or analytics trackers. To see whether the site is useful, it counts a few anonymous steps on our own server — a visit, opening a place, running or sharing a test, or the location check failing (with only a rough reason such as "location blocked" or "about 200 m away", never your position). Visits are counted once per day using a code that cannot be linked to you or to your visits on other days: its secret ingredient is random and deleted every night. Links shared from the site carry a short tag like <code>?r=wa</code> so we can see which channel brought people.</p>

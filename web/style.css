@@ -84,6 +84,12 @@ button { font: inherit; color: inherit; }
 .grab { display: none; }
 .sheet-scroll { overflow-y: auto; overscroll-behavior: contain; flex: 1 1 auto; min-height: 0; }
 #panel { padding: 20px 20px 0; }
+/* Server-rendered summary (crawlers, no-JS); the app replaces it with the interactive panel on open. */
+.ssr h1, .ssr h2 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+.ssr p { margin: 0 0 12px; color: var(--ink-2); }
+.ssr table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0 0 12px; }
+.ssr caption { text-align: left; font-weight: 600; padding-bottom: 6px; }
+.ssr th, .ssr td { text-align: left; padding: 6px 4px; border-top: 1px solid var(--line); vertical-align: top; }
 .x { flex: none; width: 32px; height: 32px; border-radius: 16px; border: 0; background: var(--sunk); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; }
 .x .ic { width: 16px; height: 16px; stroke-width: 2; }
 .x:hover { background: var(--line); }

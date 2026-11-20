@@ -557,9 +557,10 @@ def test_place_deep_link_has_preview_tags(client):
     r = client.get("/p/n1")
     assert r.status_code == 200 and "no-cache" in r.headers["cache-control"]
     html = r.text
-    assert "<title>Test Cafe — WiFi &amp; mobile data speeds · isitfast</title>" in html
+    assert "<title>Test Cafe, Bengaluru — WiFi &amp; mobile data speeds · isitfast</title>" in html
     assert 'property="og:url" content="https://isitfast.cloud/p/n1"' in html
-    assert 'content="WiFi ' in html and "og.jpg" in html and "__TITLE__" not in html
+    assert 'content="Latest test ' in html and "(unverified)" in html  # tests here have no signed receipts
+    assert "og.jpg" in html and "__TITLE__" not in html
     home = client.get("/").text
     assert 'property="og:image" content="https://isitfast.cloud/og.jpg?v=1"' in home and "summary_large_image" in home
     assert client.get("/p/x'><script>").status_code == 404

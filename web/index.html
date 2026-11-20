@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>__TITLE__</title>
   <meta name="description" content="__DESC__" />
-  <link rel="canonical" href="__URL__" />
+  <meta name="robots" content="__ROBOTS__" />
+  <link rel="canonical" href="__CANONICAL__" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="__HOST__" />
   <meta property="og:title" content="__TITLE__" />
@@ -25,7 +26,9 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=7" />
   <link rel="preconnect" href="https://maps.googleapis.com" />
   <link rel="preload" href="/fonts/geist-latin.woff2?v=1" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="/style.css?v=37" />
+  <link rel="stylesheet" href="/style.css?v=38" />
+  <noscript><style>.sidebar { display: flex; }</style></noscript>
+  __JSONLD__
 </head>
 <body>
   <div id="map" aria-label="Map of places and their internet speeds" data-map-id="__GOOGLE_MAP_ID__"></div>
@@ -89,7 +92,7 @@
   <aside class="sidebar" id="sidebar" aria-hidden="true" aria-label="Place details">
     <div class="grab" id="grab" aria-hidden="true"></div>
     <div class="sheet-scroll" id="sheet-scroll">
-      <div id="panel"></div>
+      <div id="panel">__SSR__</div>
       <section class="testview" id="testview" hidden>
         <form id="testform" onsubmit="return false">
           <div class="tv-h">

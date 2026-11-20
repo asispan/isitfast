@@ -31,7 +31,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import analytics, metrics
+from . import analytics, metrics, seo
 from .geo import haversine_m, neighbour_quadkeys, quadkey
 
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
@@ -63,6 +63,15 @@ SITE_HOSTS = {h.strip().lower() for h in os.environ.get(
 def site_base(request: Request | None) -> str:
     host = (request.headers.get("host", "") if request else "").split(":")[0].strip().lower()
     return f"https://{host}" if host in SITE_HOSTS else PUBLIC_URL
+
+
+# Optional single canonical domain for search engines (e.g. "isitfast.cloud"). Unset = every domain is its own
+# canonical (the equal-sites setup above). Only <link rel=canonical> and the sitemap/llms URLs follow it.
+CANONICAL_HOST = os.environ.get("CANONICAL_HOST", "").strip().lower()
+
+
+def canonical_base(request: Request | None) -> str:
+    return f"https://{CANONICAL_HOST}" if CANONICAL_HOST else site_base(request)
 SALT = os.environ.get("IP_SALT", "")
 WEAK_SALTS = {"", "isitfast", "change-me"}
 
@@ -189,6 +198,7 @@ def init_db() -> None:
             """
         )
         c.executescript(analytics.SCHEMA)
+        c.executescript(seo.CRAWL_SCHEMA)
         tcols = {r["name"] for r in c.execute("PRAGMA table_info(tests)")}
         if "verified" not in tcols:  # 1 = result bounded by signed receipts from our speed Worker
             try:
@@ -1315,61 +1325,191 @@ SITE_DESC = ("Real WiFi and Jio/Airtel/Vi speeds at Bengaluru cafes and coworkin
              "sitting there. Know if the WiFi can survive your standup, before you order. Free, no app, no login.")
 
 
-def render_index(request: Request | None, title: str = SITE_TITLE, desc: str = SITE_DESC, path: str = "/") -> Response:
-    """index.html with its title, description and canonical/OG URL filled in (link previews read these)."""
+def render_index(request: Request | None, title: str = SITE_TITLE, desc: str = SITE_DESC, path: str = "/",
+                 robots: str = "index, follow, max-snippet:-1", jsonld: str = "", ssr: str = "") -> Response:
+    """index.html with its title, description, canonical/OG URL, robots meta, JSON-LD and the server-rendered
+    summary filled in. Same HTML for every user agent; the app's JS replaces the summary when it opens."""
     html = _index_html(file_stamp(os.path.join(WEB_DIR, "index.html")))
     esc = lambda v: htmlmod.escape(v, quote=True)  # noqa: E731
-    base = site_base(request)
-    html = (html.replace("__TITLE__", esc(title)).replace("__DESC__", esc(desc)).replace("__URL__", esc(base + path))
-            .replace("__BASE__", esc(base)).replace("__HOST__", esc(base.removeprefix("https://"))))
-    return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
+    base, canon = site_base(request), canonical_base(request)
+    values = {"CANONICAL": esc(canon + path), "ROBOTS": esc(robots), "TITLE": esc(title), "DESC": esc(desc),
+              "URL": esc(base + path), "BASE": esc(base), "HOST": esc(base.removeprefix("https://")),
+              "JSONLD": jsonld or seo.site_jsonld(canon, SITE_DESC), "SSR": ssr}
+    # One pass: a value that happens to contain "__SSR__" (a visitor-typed name) is never expanded.
+    html = PLACEHOLDER_RE.sub(lambda m: values.get(m.group(1), m.group(0)), html)
+    headers = {"Cache-Control": "no-cache"}
+    if robots.startswith("noindex"):
+        headers["X-Robots-Tag"] = "noindex"
+    return Response(html, media_type="text/html; charset=utf-8", headers=headers)
 
 
-def _ago(ts: int) -> str:
-    d = max(0, int(time.time()) - ts)
-    return "today" if d < 86400 else "yesterday" if d < 2 * 86400 else f"{d // 86400} days ago"
+PLACEHOLDER_RE = re.compile(r"__(CANONICAL|ROBOTS|TITLE|DESC|URL|BASE|HOST|JSONLD|SSR)__")
 
 
-def place_preview_text(pid: str) -> tuple[str, str] | None:
-    """Title + description for a shared /p/<id> link, from our own data. Google places keep no name (only the
-    place_id may be stored), so their previews use a generic title."""
+SEO_TEST_COLS = "network, carrier, down_mbps, up_mbps, created_at, verified, ip_hash"
+
+
+def _place_tests(c: sqlite3.Connection, pid: str) -> list:
+    return c.execute(f"SELECT {SEO_TEST_COLS} FROM tests WHERE place_id=? ORDER BY created_at DESC LIMIT 500",
+                     (pid,)).fetchall()
+
+
+def _headline(groups: list[dict]) -> str:
+    """Link-preview description: each headline network's latest verified test, with its date."""
+    parts = []
+    for g in seo.headline_groups(groups):
+        lv = g["latest_verified"]
+        kind = "WiFi" if g["network"] == "wifi" else f"{g['provider']} mobile data"
+        parts.append(f"{kind} {seo.mbps(lv['down'])} Mbps download / {seo.mbps(lv['up'])} Mbps upload, "
+                     f"verified {seo.fmt_date(lv['ts'])}")
+    if parts:
+        return ". ".join(parts) + ". Tested on site by people who were there."
+    if groups:
+        lt = groups[0]["latest"]
+        return (f"Latest test {seo.mbps(lt['down'])} Mbps download on {seo.fmt_date(lt['ts'])} (unverified). "
+                "Tested on site by people who were there.")
+    return "No one has tested here yet. Be the first: a 20-second speed test, run at the place."
+
+
+def place_page_parts(pid: str, request: Request | None) -> dict | None:
+    """Title, description, robots, JSON-LD and summary HTML for /p/<id>, from our own data only. Google places
+    keep no name (only the place_id may be stored) and homes are private: both get no summary and stay out of
+    the index."""
     with db() as c:
-        p = c.execute("SELECT name FROM places WHERE id=?", (pid,)).fetchone()
+        p = c.execute("SELECT id, name, kind, lat, lon, tags FROM places WHERE id=?", (pid,)).fetchone()
         if not p:
             return None
-        tests = c.execute("SELECT network, carrier, down_mbps, up_mbps, created_at FROM tests WHERE place_id=? "
-                          "ORDER BY created_at DESC LIMIT 200", (pid,)).fetchall()
-    name = p["name"] or "This place"
-    title = f"{name} — WiFi & mobile data speeds · isitfast" if p["name"] else "WiFi & mobile data speeds here · isitfast"
-    wifi = next((t for t in tests if t["network"] == "wifi"), None)
-    latest_cell: dict[str, sqlite3.Row] = {}
-    for t in tests:
-        if t["network"] == "cellular":
-            latest_cell.setdefault(t["carrier"], t)
-    parts = []
-    if wifi:
-        parts.append(f"WiFi {wifi['down_mbps']:.0f}↓ / {wifi['up_mbps']:.0f}↑ Mbps, tested {_ago(wifi['created_at'])}")
-    if latest_cell:
-        best = max(latest_cell.values(), key=lambda t: t["down_mbps"])
-        parts.append(f"{best['carrier']} mobile data {best['down_mbps']:.0f}↓ Mbps")
-    desc = (". ".join(parts) + ". Tested on site by people who were there." if parts
-            else "No one has tested here yet. Be the first: a 20-second speed test, run at the place.")
-    return title, desc
+        tests = _place_tests(c, pid)
+    place = {**dict(p), "tags": json.loads(p["tags"] or "{}")}
+    groups = seo.place_groups(tests)
+    home = place["kind"] in RESIDENTIAL_KINDS
+    public = bool(place["name"]) and not home
+    where = seo.locality(place["tags"], place["lat"], place["lon"]) if public else ""
+    name = place["name"] or "This place"
+    title = (f"{name}{', ' + where.split(', ')[0] if where else ''} — WiFi & mobile data speeds · isitfast"
+             if place["name"] else "WiFi & mobile data speeds here · isitfast")
+    desc = _headline(groups)
+    ok = seo.indexable(place, groups, RESIDENTIAL_KINDS)
+    canon = canonical_base(request)
+    url = canon + f"/p/{pid}"
+    return {
+        "title": title, "desc": desc, "robots": "index, follow, max-snippet:-1" if ok else "noindex, follow",
+        "jsonld": seo.place_jsonld(place, seo.city_for(place["lat"], place["lon"]) or "", groups, url, canon, title,
+                                   SITE_DESC) if ok else "",
+        "ssr": seo.place_summary_html(place, where, groups, canon.removeprefix("https://")) if public else "",
+    }
+
+
+_listing: tuple[float, list] = (0.0, [])
+
+
+def indexable_places() -> list[dict]:
+    """Every tested place whose page is indexable, newest test first: {id, name, where, line, last}.
+    Feeds the home page links, sitemap.xml and llms.txt. Cached per worker for 5 minutes."""
+    global _listing
+    if time.time() - _listing[0] < 300:
+        return _listing[1]
+    out = []
+    with db() as c:
+        rows = c.execute("SELECT id, name, kind, lat, lon, tags FROM places WHERE name IS NOT NULL AND id IN "
+                         "(SELECT place_id FROM tests WHERE verified=1)").fetchall()
+        for p in rows:
+            place = {**dict(p), "tags": json.loads(p["tags"] or "{}")}
+            groups = seo.place_groups(_place_tests(c, p["id"]))
+            if not seo.indexable(place, groups, RESIDENTIAL_KINDS):
+                continue
+            g = seo.headline_groups(groups)[0]
+            lv, n = g["latest_verified"], (g["verified"] or {}).get("readings", 1)
+            line = (f"{g['label']} {seo.mbps(lv['down'])} Mbps download, latest verified test "
+                    f"{seo.fmt_date(lv['ts'])} ({n} verified reading{'s' if n != 1 else ''})")
+            out.append({"id": p["id"], "name": p["name"], "where": seo.locality(place["tags"], p["lat"], p["lon"]),
+                        "line": line, "last": max(x["latest"]["ts"] for x in groups)})
+    out.sort(key=lambda x: -x["last"])
+    _listing = (time.time(), out)
+    return out
 
 
 @app.get("/")
 @app.get("/index.html")
 def index(request: Request):
-    return render_index(request)
+    return render_index(request, ssr=seo.home_summary_html(indexable_places()[:300]))
 
 
 @app.get("/p/{pid}")
 def place_page(pid: str, request: Request):
-    """Shareable place URL. Same app as /, with link-preview tags for the place; the client opens it."""
+    """Shareable place URL. Same app as /, with link-preview tags, JSON-LD and a server-rendered summary of the
+    place's measurements (for crawlers and AI fetchers that don't run JS); the client then opens the place."""
     if not PID_RE.match(pid):
         raise HTTPException(404, "unknown place")
-    t = place_preview_text(pid)
-    return render_index(request, *t, path=f"/p/{pid}") if t else render_index(request, path=f"/p/{pid}")
+    t = place_page_parts(pid, request)
+    if not t:
+        return render_index(request, path=f"/p/{pid}", robots="noindex, follow")
+    return render_index(request, t["title"], t["desc"], path=f"/p/{pid}", robots=t["robots"], jsonld=t["jsonld"],
+                        ssr=t["ssr"])
+
+
+TEXT_CACHE = {"Cache-Control": "public, max-age=3600"}
+
+
+@app.api_route("/robots.txt", methods=["GET", "HEAD"])
+def robots_txt(request: Request):
+    return Response(seo.robots_txt(canonical_base(request)), media_type="text/plain; charset=utf-8", headers=TEXT_CACHE)
+
+
+@app.api_route("/sitemap.xml", methods=["GET", "HEAD"])
+def sitemap_xml(request: Request):
+    places = indexable_places()
+    urls = [("/", max((p["last"] for p in places), default=None)), ("/about.html", None)]
+    urls += [(f"/p/{p['id']}", p["last"]) for p in places]
+    return Response(seo.sitemap_xml(canonical_base(request), urls), media_type="application/xml", headers=TEXT_CACHE)
+
+
+@app.api_route("/llms.txt", methods=["GET", "HEAD"])
+def llms_txt(request: Request):
+    places = indexable_places()
+    with db() as c:
+        n_verified = c.execute("SELECT COUNT(*) FROM tests WHERE verified=1").fetchone()[0]
+    return Response(seo.llms_txt(canonical_base(request), places, len(places), n_verified),
+                    media_type="text/plain; charset=utf-8", headers=TEXT_CACHE)
+
+
+@app.get("/api/crawlers")
+def crawlers_view(req: Request, days: int = Query(7, ge=1, le=400)):
+    """AI/search crawler hits and AI-assistant referrals (token-protected like /api/metrics)."""
+    require_metrics_token(req)
+    with db() as c:
+        return JSONResponse(seo.crawl_report(c, days), headers={"Cache-Control": "no-store"})
+
+
+_crawl_pruned = 0.0
+
+
+def log_crawl(kind: str, agent: str, path: str, status: int) -> None:
+    global _crawl_pruned
+    now = time.time()
+    try:
+        with db() as c:
+            c.execute("INSERT INTO crawl_log VALUES (?,?,?,?,?)", (int(now), kind, agent, path, status))
+            if now - _crawl_pruned > 86400:
+                c.execute("DELETE FROM crawl_log WHERE ts < ?", (int(now) - seo.CRAWL_RETAIN_DAYS * 86400,))
+                _crawl_pruned = now
+    except sqlite3.Error:
+        metric("db_error", "crawl_log")
+
+
+@app.middleware("http")
+async def crawl_logger(request: Request, call_next):
+    """Record visits from AI/search crawlers and from AI assistants' links (no IPs, no other visitors)."""
+    resp = await call_next(request)
+    path = request.url.path
+    if path.startswith("/api/"):
+        resp.headers["X-Robots-Tag"] = "noindex"  # crawlable (Google renders the app with it), never indexed
+    if request.method in ("GET", "HEAD") and seo.loggable(path):
+        hit = seo.classify(request.headers.get("user-agent", ""), request.headers.get("referer", ""),
+                           request.query_params.get("utm_source"))
+        if hit:
+            await asyncio.to_thread(log_crawl, hit[0], hit[1], seo.path_group(request.url.path), resp.status_code)
+    return resp
 
 
 # Self-hosted basemap (vector tiles, style, fonts, sprites); see app/basemap.py
